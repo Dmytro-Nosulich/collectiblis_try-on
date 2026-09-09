@@ -21,9 +21,10 @@ const mediapipeModelDir = 'vendor/mediapipe';
 // MediaPipe WASM assets above.
 const dracoDecoderDir = 'node_modules/three/examples/jsm/libs/draco/gltf';
 
-// Placeholder earring GLB (Phase 3 debug harness only — see
-// scripts/generate-placeholder-earring.mjs). Real per-product GLBs come
-// from Shopify's own CDN at runtime and are never copied here.
+// Placeholder earring GLBs (Phase 3/4 debug harness only — see
+// scripts/generate-placeholder-earring.mjs; the glob covers both the rigid
+// hoop and the Phase 4 dangly test model). Real per-product GLBs come from
+// Shopify's own CDN at runtime and are never copied here.
 const placeholderEarringDir = 'vendor/earrings';
 
 export default defineConfig({
@@ -51,7 +52,7 @@ export default defineConfig({
           rename: { stripBase: true },
         },
         {
-          src: `${placeholderEarringDir}/placeholder-earring.glb`,
+          src: `${placeholderEarringDir}/placeholder-earring*.glb`,
           dest: 'earrings',
           rename: { stripBase: true },
         },

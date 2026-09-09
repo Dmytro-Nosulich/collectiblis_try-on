@@ -83,7 +83,13 @@
 
     <script type="module">
       import { startCamera } from '/src/camera.ts';
-      import { startTracking, earAnchorTuning, DEFAULT_EAR_ANCHOR_TUNING } from '/src/tracking.ts';
+      import {
+        startTracking,
+        earAnchorTuning,
+        DEFAULT_EAR_ANCHOR_TUNING,
+        rotationTuning,
+        DEFAULT_ROTATION_TUNING,
+      } from '/src/tracking.ts';
 
       const debugButton = document.getElementById('debug-tracking-button');
       const debugContainer = document.getElementById('debug-tracking-container');
@@ -97,7 +103,62 @@
         await startTracking(video, canvas);
       });
 
-      const TUNING_CONTROLS = [
+      /**
+       * Builds a set of range-slider rows into `slidersContainer`, one per
+       * `controls` entry (`[key, label, min, max, step]`), bound live to
+       * `tuningObject[key]` — shared by the ear-anchor panel (Phase 2) and
+       * the rotation panel (Phase 4) below, since both just live-edit a
+       * plain tuning object exported from tracking.ts. Returns a
+       * resetToDefaults() function for the panel's reset button.
+       */
+      function createTuningPanel(slidersContainer, controls, tuningObject, defaultsObject) {
+        const readouts = {};
+
+        for (const [key, label, min, max, step] of controls) {
+          const row = document.createElement('div');
+          row.style.margin = '0.4rem 0';
+
+          const labelEl = document.createElement('label');
+          labelEl.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-size:0.85rem';
+
+          const nameSpan = document.createElement('span');
+          nameSpan.style.width = '11rem';
+          nameSpan.textContent = label;
+
+          const input = document.createElement('input');
+          input.type = 'range';
+          input.min = String(min);
+          input.max = String(max);
+          input.step = String(step);
+          input.value = String(tuningObject[key]);
+          input.style.flex = '1';
+
+          const valueSpan = document.createElement('span');
+          valueSpan.style.cssText = 'width:3.5rem;text-align:right';
+          valueSpan.textContent = tuningObject[key].toFixed(3);
+          readouts[key] = { input, valueSpan };
+
+          input.addEventListener('input', () => {
+            const value = parseFloat(input.value);
+            tuningObject[key] = value;
+            valueSpan.textContent = value.toFixed(3);
+          });
+
+          labelEl.append(nameSpan, input, valueSpan);
+          row.append(labelEl);
+          slidersContainer.append(row);
+        }
+
+        return function resetToDefaults() {
+          for (const [key] of controls) {
+            tuningObject[key] = defaultsObject[key];
+            readouts[key].input.value = String(tuningObject[key]);
+            readouts[key].valueSpan.textContent = tuningObject[key].toFixed(3);
+          }
+        };
+      }
+
+      const EAR_ANCHOR_TUNING_CONTROLS = [
         ['outwardFactor', 'Outward factor', 0, 0.4, 0.005],
         ['downFactor', 'Down factor', 0, 0.8, 0.01],
         ['backFactor', 'Back (z) factor', 0, 0.3, 0.01],
@@ -106,62 +167,57 @@
         ['beta', 'Filter beta', 0, 2, 0.01],
       ];
 
-      const slidersContainer = document.getElementById('debug-tuning-sliders');
-      const readouts = {};
+      const resetEarAnchorTuning = createTuningPanel(
+        document.getElementById('debug-tuning-sliders'),
+        EAR_ANCHOR_TUNING_CONTROLS,
+        earAnchorTuning,
+        DEFAULT_EAR_ANCHOR_TUNING,
+      );
+      document.getElementById('debug-tuning-reset').addEventListener('click', resetEarAnchorTuning);
 
-      for (const [key, label, min, max, step] of TUNING_CONTROLS) {
-        const row = document.createElement('div');
-        row.style.margin = '0.4rem 0';
+      // Sign sliders use step=2 over [-1, 1] so they can only land on -1 or
+      // 1 — see rotationTuning's docstring in tracking.ts for why a wrong
+      // sign should be a slider flip, not a code change.
+      const ROTATION_TUNING_CONTROLS = [
+        ['minCutoffHz', 'Filter min cutoff (Hz)', 0.05, 5, 0.05],
+        ['beta', 'Filter beta', 0, 2, 0.01],
+        ['rollSign', 'Roll sign', -1, 1, 2],
+        ['pitchSign', 'Pitch sign', -1, 1, 2],
+        ['yawSign', 'Yaw sign', -1, 1, 2],
+        ['yawAngleSensitivity', 'Yaw sensitivity', 0.1, 10, 0.1],
+        ['pitchAngleSensitivity', 'Pitch sensitivity', 0.1, 10, 0.1],
+        ['maxYawRotationRadians', 'Max yaw (rad)', 0, 1.6, 0.05],
+        ['maxPitchRotationRadians', 'Max pitch (rad)', 0, 1.6, 0.05],
+        ['yawZeroOffset', 'Yaw zero offset', -0.5, 0.5, 0.01],
+        ['pitchZeroOffset', 'Pitch zero offset', -0.5, 0.5, 0.01],
+      ];
 
-        const labelEl = document.createElement('label');
-        labelEl.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-size:0.85rem';
-
-        const nameSpan = document.createElement('span');
-        nameSpan.style.width = '11rem';
-        nameSpan.textContent = label;
-
-        const input = document.createElement('input');
-        input.type = 'range';
-        input.min = String(min);
-        input.max = String(max);
-        input.step = String(step);
-        input.value = String(earAnchorTuning[key]);
-        input.style.flex = '1';
-
-        const valueSpan = document.createElement('span');
-        valueSpan.style.cssText = 'width:3.5rem;text-align:right';
-        valueSpan.textContent = earAnchorTuning[key].toFixed(3);
-        readouts[key] = { input, valueSpan };
-
-        input.addEventListener('input', () => {
-          const value = parseFloat(input.value);
-          earAnchorTuning[key] = value;
-          valueSpan.textContent = value.toFixed(3);
-        });
-
-        labelEl.append(nameSpan, input, valueSpan);
-        row.append(labelEl);
-        slidersContainer.append(row);
-      }
-
-      document.getElementById('debug-tuning-reset').addEventListener('click', () => {
-        for (const [key] of TUNING_CONTROLS) {
-          earAnchorTuning[key] = DEFAULT_EAR_ANCHOR_TUNING[key];
-          readouts[key].input.value = String(earAnchorTuning[key]);
-          readouts[key].valueSpan.textContent = earAnchorTuning[key].toFixed(3);
-        }
-      });
+      const resetRotationTuning = createTuningPanel(
+        document.getElementById('debug-rotation-tuning-sliders'),
+        ROTATION_TUNING_CONTROLS,
+        rotationTuning,
+        DEFAULT_ROTATION_TUNING,
+      );
+      document
+        .getElementById('debug-rotation-tuning-reset')
+        .addEventListener('click', resetRotationTuning);
     </script>
 
-    <h2>Phase 3 debug: earring render anchored to ear point</h2>
+    <h2>Phase 3/4 debug: earring render + orientation/hang tuning</h2>
     <p>
-      Throwaway debug harness — loads the placeholder earring GLB
-      (<code>vendor/earrings/placeholder-earring.glb</code>, see
-      <code>scripts/generate-placeholder-earring.mjs</code>) and renders it anchored to the smoothed
-      ear points from the pipeline above. Not part of the real <code>openTryOn()</code> flow; delete
-      this block once Phase 5 builds the real UI shell.
+      Throwaway debug harness — loads a placeholder earring GLB (<code>vendor/earrings/</code>, see
+      <code>scripts/generate-placeholder-earring.mjs</code>) and renders it anchored + rotated to
+      the smoothed head pose from the pipeline above. Not part of the real
+      <code>openTryOn()</code> flow; delete this block once Phase 5 builds the real UI shell.
     </p>
     <button id="debug-render-button">Start camera + earring render debug</button>
+    <label style="margin-left: 1rem; font-size: 0.9rem">
+      Model:
+      <select id="debug-model-select" disabled>
+        <option value="placeholder-earring.glb">Rigid hoop</option>
+        <option value="placeholder-earring-dangly.glb">Dangly</option>
+      </select>
+    </label>
     <div
       id="debug-render-container"
       style="position: relative; width: 640px; max-width: 100%; display: none"
@@ -177,27 +233,76 @@
       ></canvas>
     </div>
 
+    <div
+      id="debug-rotation-readout"
+      style="margin-top: 0.5rem; font-size: 0.85rem; font-family: monospace"
+    >
+      roll: -- deg&nbsp;&nbsp;pitch: -- deg&nbsp;&nbsp;yaw: -- deg
+    </div>
+
+    <div id="debug-rotation-tuning-panel" style="margin-top: 1rem; max-width: 420px">
+      <h3 style="margin-bottom: 0.25rem">Rotation tuning (debug only)</h3>
+      <p style="margin-top: 0; font-size: 0.85rem; color: #555">
+        Live-adjusts src/tracking.ts's <code>rotationTuning</code> — damping/signs/sensitivities for
+        head roll/pitch/yaw, tuned separately from the ear-anchor panel above. Use the readout above
+        alongside known head motion (e.g. "I just turned right") to check each sign before judging
+        the 3D result by eye.
+      </p>
+      <div id="debug-rotation-tuning-sliders"></div>
+      <button
+        id="debug-rotation-tuning-reset"
+        type="button"
+        style="margin-top: 0.5rem; font-size: 0.85rem; padding: 0.3rem 0.7rem"
+      >
+        Reset to defaults
+      </button>
+    </div>
+
     <script type="module">
       import { startCamera } from '/src/camera.ts';
       import { startTracking } from '/src/tracking.ts';
       import { createEarringScene } from '/src/render.ts';
       import { getAssetBaseUrl } from '/src/assets.ts';
 
+      const RADIANS_TO_DEGREES = 180 / Math.PI;
+
       const renderButton = document.getElementById('debug-render-button');
       const renderContainer = document.getElementById('debug-render-container');
       const renderVideo = document.getElementById('debug-render-video');
       const renderDotsCanvas = document.getElementById('debug-render-dots-canvas');
       const renderEarringCanvas = document.getElementById('debug-render-earring-canvas');
+      const modelSelect = document.getElementById('debug-model-select');
+      const rotationReadout = document.getElementById('debug-rotation-readout');
+
+      function formatRotationReadout(headRotation) {
+        if (!headRotation) {
+          return 'roll: -- deg&nbsp;&nbsp;pitch: -- deg&nbsp;&nbsp;yaw: -- deg';
+        }
+        const roll = (headRotation.rollRadians * RADIANS_TO_DEGREES).toFixed(1);
+        const pitch = (headRotation.pitchRadians * RADIANS_TO_DEGREES).toFixed(1);
+        const yaw = (headRotation.yawRadians * RADIANS_TO_DEGREES).toFixed(1);
+        return `roll: ${roll} deg&nbsp;&nbsp;pitch: ${pitch} deg&nbsp;&nbsp;yaw: ${yaw} deg`;
+      }
 
       renderButton.addEventListener('click', async () => {
         renderButton.disabled = true;
         renderContainer.style.display = 'block';
         await startCamera(renderVideo);
-        const glbUrl = `${getAssetBaseUrl()}earrings/placeholder-earring.glb`;
+        const glbUrl = `${getAssetBaseUrl()}earrings/${modelSelect.value}`;
         const earringScene = await createEarringScene(renderEarringCanvas, renderVideo, glbUrl);
-        await startTracking(renderVideo, renderDotsCanvas, (frame) =>
-          earringScene.updateFrame(frame),
-        );
+        modelSelect.disabled = false;
+        modelSelect.addEventListener('change', () => {
+          modelSelect.disabled = true;
+          earringScene
+            .loadModel(`${getAssetBaseUrl()}earrings/${modelSelect.value}`)
+            .finally(() => {
+              modelSelect.disabled = false;
+            });
+        });
+        await startTracking(renderVideo, renderDotsCanvas, (frame) => {
+          earringScene.updateFrame(frame);
+          rotationReadout.innerHTML = formatRotationReadout(frame?.headRotation);
+        });
       });
     </script>
   </body>

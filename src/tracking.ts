@@ -13,6 +13,10 @@
  * (`TrackingFrameCallback`) so render.ts can consume the same smoothed
  * anchors (plus faceScale, for on-screen sizing) this file already computes
  * for its own debug drawing — one detection loop feeds both.
+ * Phase 4: adds signed head roll/pitch/yaw (`HeadRotation`), smoothed with
+ * its own separately-tuned One Euro filters (`RotationTuning`), so
+ * render.ts can rotate the earring model itself instead of just its anchor
+ * position.
  */
 
 import {
@@ -157,11 +161,103 @@ export const DEFAULT_EAR_ANCHOR_TUNING: Readonly<EarAnchorTuning> = Object.freez
  */
 export const earAnchorTuning: EarAnchorTuning = { ...DEFAULT_EAR_ANCHOR_TUNING };
 
+// --- Head rotation (roll/pitch/yaw) ---------------------------------------
+//
+// Roll was already derived above (computeHeadRollAngle) to keep the ear-
+// anchor offset pointing at the ear as the head tilts. Phase 4 reuses that
+// same angle and adds two new landmark-based proxies — pitch (nod) and
+// SIGNED yaw (turn) — so render.ts can rotate the earring model itself
+// instead of just its anchor position.
+//
+// Deliberately landmark-derived rather than turning on MediaPipe's
+// `outputFacialTransformationMatrixes` option (a precomputed head-pose
+// matrix): Phase 1 already flagged landmark-derived rotation as the
+// anticipated Phase 4 approach, matching build-plan.md's explicit
+// instruction to derive roll/pitch/yaw "from stable landmark
+// relationships." The transformation-matrix option remains available as a
+// fallback if these proxies prove too unstable after real tuning, but isn't
+// used here.
+//
+// NOTE: like every angle in this file, these are plain numbers with no
+// wraparound handling — safe only because realistic head poses for this
+// widget stay well within (-pi, pi) (tracking degrades before an actual
+// 180-degree flip anyway). A One Euro Filter has no concept of wraparound,
+// so smoothing an angle that actually crossed the +-pi boundary would
+// produce a visible snap; not a concern at the angle ranges this file
+// clamps to (see RotationTuning's max*RotationRadians below).
+
+/** Head rotation in radians, in the same world axes render.ts renders in (X=screen-right, Y=screen-down, Z=depth). */
+export interface HeadRotation {
+  rollRadians: number;
+  pitchRadians: number;
+  yawRadians: number;
+}
+
+export interface RotationTuning {
+  /** One Euro Filter params for rotation — tuned SEPARATELY from earAnchorTuning's position smoothing (see DEFAULT_ROTATION_TUNING). */
+  minCutoffHz: number;
+  beta: number;
+  /**
+   * Expected to be +1 or -1 (enforced by the debug slider's step size, not
+   * by this type). Deliberately defaulted to 1 rather than hand-derived:
+   * this file has already hit one rotation-direction sign bug from
+   * assuming instead of testing (see computeEarAnchor's roll-negation
+   * comment) — a wrong sign here should be a one-slider fix during live
+   * testing, not a rederivation.
+   */
+  rollSign: number;
+  pitchSign: number;
+  yawSign: number;
+  /**
+   * Scales the raw z-based pitch/yaw ratios (see computePitchSignedRatio/
+   * computeYawSignedRatio) up into a plausible rotation-angle range.
+   * Unvalidated starting guesses — tune live.
+   */
+  yawAngleSensitivity: number;
+  pitchAngleSensitivity: number;
+  /** Defensive clamps against proxy noise/instability at extreme angles. */
+  maxYawRotationRadians: number;
+  maxPitchRotationRadians: number;
+  /** Small corrections if a proxy reads nonzero at true rest (same quirk already known on the unsigned yaw magnitude proxy — see computeYawMagnitude). */
+  yawZeroOffset: number;
+  pitchZeroOffset: number;
+}
+
+/**
+ * minCutoffHz/beta are deliberately LOWER than DEFAULT_EAR_ANCHOR_TUNING's
+ * (1.0/0.3) so rotation visibly lags/settles rather than tracking the head
+ * in perfect lockstep — this is the "settle" behavior build-plan.md asks
+ * for, achieved with the same filter mechanism already used for position
+ * rather than new spring/pendulum physics. yawAngleSensitivity/
+ * pitchAngleSensitivity/the max*RotationRadians clamps/the sign flags/the
+ * zero-offsets are all unvalidated starting guesses pending real-webcam
+ * tuning via the live-tuning panel, same as every constant in
+ * DEFAULT_EAR_ANCHOR_TUNING was.
+ */
+export const DEFAULT_ROTATION_TUNING: Readonly<RotationTuning> = Object.freeze({
+  minCutoffHz: 0.5,
+  beta: 0.15,
+  rollSign: 1,
+  pitchSign: 1,
+  yawSign: 1,
+  yawAngleSensitivity: 2.5,
+  pitchAngleSensitivity: 2.5,
+  maxYawRotationRadians: Math.PI / 3,
+  maxPitchRotationRadians: Math.PI / 4,
+  yawZeroOffset: 0,
+  pitchZeroOffset: 0,
+});
+
+/** Live-tunable rotation state — same "one mutable object" pattern as earAnchorTuning, for the same reason (see that constant's comment). */
+export const rotationTuning: RotationTuning = { ...DEFAULT_ROTATION_TUNING };
+
 // `1eurofilter` is a SCALAR filter (confirmed by reading its source: it
 // wraps two plain-number low-pass filters), so each ear anchor needs one
-// filter instance per coordinate (x, y, z) — 6 total for two ears.
-const EAR_ANCHOR_DCUTOFF_HZ = 1.0; // library default; rarely needs tuning
-const EAR_ANCHOR_FILTER_INITIAL_FREQ_HZ = 30; // initial guess only; 1eurofilter recalculates real freq from consecutive call timestamps
+// filter instance per coordinate (x, y, z) — 6 total for two ears. These
+// constructor knobs are generic to OneEuroFilter (not position-specific),
+// so they're shared by the rotation filters added in Phase 4 too.
+const ONE_EURO_DCUTOFF_HZ = 1.0; // library default; rarely needs tuning
+const ONE_EURO_FILTER_INITIAL_FREQ_HZ = 30; // initial guess only; 1eurofilter recalculates real freq from consecutive call timestamps
 
 // --- Debug overlay colors for ear anchors ---------------------------------
 const RAW_EAR_ANCHOR_COLOR = 'rgba(255, 255, 255, 0.55)'; // dim, shared by both ears
@@ -185,6 +281,8 @@ interface EarAnchors {
   right: EarAnchorPoint;
   /** Smoothed interocular distance, normalized by frame width (same units as x) — see render.ts's use as a scale reference. */
   faceScale: number;
+  /** Raw (unsmoothed) head rotation for this frame — smoothed separately in startTracking, see filterHeadRotation. */
+  rawHeadRotation: HeadRotation;
 }
 
 /** One tracking frame's worth of data, handed to render.ts via `onFrame`. */
@@ -192,6 +290,8 @@ export interface TrackingFrame {
   left: EarAnchorPoint;
   right: EarAnchorPoint;
   faceScale: number;
+  /** Head-level, not per-ear (like faceScale) — both ears get the same rotation, see render.ts's placeEar. */
+  headRotation: HeadRotation;
   timestampMs: number;
 }
 
@@ -204,10 +304,18 @@ interface AxisFilters {
   z: OneEuroFilter;
 }
 
-interface EarAnchorFilters {
+interface HeadRotationFilters {
+  roll: OneEuroFilter;
+  pitch: OneEuroFilter;
+  yaw: OneEuroFilter;
+}
+
+/** Renamed from EarAnchorFilters (Phase 3) now that it holds more than ear anchors. */
+interface TrackingFilters {
   left: AxisFilters;
   right: AxisFilters;
   faceScale: OneEuroFilter;
+  headRotation: HeadRotationFilters;
 }
 
 function distance3D(a: NormalizedLandmark, b: NormalizedLandmark): number {
@@ -252,13 +360,15 @@ function computeHeadRollAngle(landmarks: NormalizedLandmark[], aspect: number): 
 }
 
 /**
- * Cheap, unsigned proxy for how far the head has yawed (turned) away from
- * facing the camera — 0 facing the camera, growing with |yaw| in either
- * direction. Deliberately unsigned: the same magnitude is applied to both
- * ears (see computeEarAnchor), so a sign is never needed — which also
- * sidesteps this file's demonstrated history of left/right/mirroring sign
- * bugs (see the mirroring comment near the top of this file) for this
- * particular calculation.
+ * Cheap proxy for how far the head has yawed (turned) away from facing the
+ * camera, signed by turn direction — 0 facing the camera, growing with
+ * |yaw| in either direction. computeYawMagnitude (below) takes the
+ * unsigned magnitude of this for the ear-anchor outward/back offset scaling
+ * (which never needs a sign — the same magnitude applies to both ears, see
+ * computeEarAnchor, sidestepping this file's demonstrated history of left/
+ * right/mirroring sign bugs for that calculation). The signed version is
+ * used by computeRawHeadRotation for actual model rotation, where the turn
+ * direction does matter.
  *
  * Rationale: yawing the head about its vertical axis moves one cheek
  * landmark closer to the camera (smaller z) and the other farther
@@ -271,20 +381,74 @@ function computeHeadRollAngle(landmarks: NormalizedLandmark[], aspect: number): 
  * symmetric, and MediaPipe's z is inferred depth — noisier and less
  * certain than x/y — so expect a small nonzero reading even at true
  * yaw=0 and extra jitter at high yaw; neither breaks anything downstream,
- * since the result only ever scales a magnitude between 0 and 1x today's
- * calibrated offset (see computeEarAnchor) and flows through the same
- * One Euro filtering every other jitter source in the ear anchor does.
+ * since the magnitude use only ever scales a factor between 0 and 1x
+ * today's calibrated offset (see computeEarAnchor), the rotation use is
+ * clamped (see computeRawHeadRotation), and both flow through One Euro
+ * filtering same as every other jitter source in this file.
  *
  * Normalized by faceScale for the same reason every other offset in this
  * file is: stays comparable across users/camera distances. Guards
  * against faceScale being ~0 (degenerate/undetected face) instead of
  * dividing by it directly.
  */
-function computeYawMagnitude(landmarks: NormalizedLandmark[], faceScale: number): number {
-  const cheekZDifference = Math.abs(
-    landmarks[RIGHT_CHEEK_LANDMARK_INDEX].z - landmarks[LEFT_CHEEK_LANDMARK_INDEX].z,
-  );
+function computeYawSignedRatio(landmarks: NormalizedLandmark[], faceScale: number): number {
+  const cheekZDifference =
+    landmarks[RIGHT_CHEEK_LANDMARK_INDEX].z - landmarks[LEFT_CHEEK_LANDMARK_INDEX].z;
   return faceScale > 0 ? cheekZDifference / faceScale : 0;
+}
+
+function computeYawMagnitude(landmarks: NormalizedLandmark[], faceScale: number): number {
+  return Math.abs(computeYawSignedRatio(landmarks, faceScale));
+}
+
+/**
+ * Signed proxy for head pitch (nodding up/down), built the same way as
+ * computeYawSignedRatio but using the forehead(10)/chin(152) pair's z
+ * difference instead of the cheek pair's — the same two landmarks already
+ * used for roll (computeHeadRollAngle), reused here for their z component
+ * instead of their 2D image-plane position. Approximate for the same
+ * reason the yaw proxy is: 10/152 sit near the head's vertical midline, so
+ * this should be less yaw-contaminated than the cheek pair is roll-
+ * contaminated, but it's still a ratio proxy, not a hand-derived geometric
+ * angle — sign and magnitude are unverified until checked against a real
+ * webcam (see rotationTuning.pitchSign/pitchAngleSensitivity).
+ */
+function computePitchSignedRatio(landmarks: NormalizedLandmark[], faceScale: number): number {
+  const foreheadChinZDifference =
+    landmarks[CHIN_LANDMARK_INDEX].z - landmarks[FOREHEAD_LANDMARK_INDEX].z;
+  return faceScale > 0 ? foreheadChinZDifference / faceScale : 0;
+}
+
+/**
+ * Turns the raw roll angle (already computed for the ear-anchor offset) and
+ * the two z-based pitch/yaw ratios above into a clamped, sign-adjustable
+ * HeadRotation. Every sign/sensitivity/clamp/offset lives in rotationTuning
+ * so a wrong sign or an unstable-feeling proxy is a live slider tweak
+ * during real-webcam testing, not a code change — see RotationTuning's
+ * docstring.
+ */
+function computeRawHeadRotation(
+  landmarks: NormalizedLandmark[],
+  faceScale: number,
+  rollAngleRadians: number,
+): HeadRotation {
+  const yawRatio = computeYawSignedRatio(landmarks, faceScale) - rotationTuning.yawZeroOffset;
+  const pitchRatio = computePitchSignedRatio(landmarks, faceScale) - rotationTuning.pitchZeroOffset;
+  const yawRadians = clamp(
+    rotationTuning.yawSign * yawRatio * rotationTuning.yawAngleSensitivity,
+    -rotationTuning.maxYawRotationRadians,
+    rotationTuning.maxYawRotationRadians,
+  );
+  const pitchRadians = clamp(
+    rotationTuning.pitchSign * pitchRatio * rotationTuning.pitchAngleSensitivity,
+    -rotationTuning.maxPitchRotationRadians,
+    rotationTuning.maxPitchRotationRadians,
+  );
+  return {
+    rollRadians: rotationTuning.rollSign * rollAngleRadians,
+    pitchRadians,
+    yawRadians,
+  };
 }
 
 function computeEarAnchor(
@@ -372,27 +536,36 @@ function computeRawEarAnchors(landmarks: NormalizedLandmark[], aspect: number): 
       aspect,
     ),
     faceScale,
+    rawHeadRotation: computeRawHeadRotation(landmarks, faceScale, rollAngleRadians),
   };
 }
 
-function createOneEuroFilter(): OneEuroFilter {
-  return new OneEuroFilter(
-    EAR_ANCHOR_FILTER_INITIAL_FREQ_HZ,
-    earAnchorTuning.minCutoffHz,
-    earAnchorTuning.beta,
-    EAR_ANCHOR_DCUTOFF_HZ,
-  );
+function createOneEuroFilter(minCutoffHz: number, beta: number): OneEuroFilter {
+  return new OneEuroFilter(ONE_EURO_FILTER_INITIAL_FREQ_HZ, minCutoffHz, beta, ONE_EURO_DCUTOFF_HZ);
 }
 
-function createAxisFilters(): AxisFilters {
-  return { x: createOneEuroFilter(), y: createOneEuroFilter(), z: createOneEuroFilter() };
-}
-
-function createEarAnchorFilters(): EarAnchorFilters {
+function createAxisFilters(minCutoffHz: number, beta: number): AxisFilters {
   return {
-    left: createAxisFilters(),
-    right: createAxisFilters(),
-    faceScale: createOneEuroFilter(),
+    x: createOneEuroFilter(minCutoffHz, beta),
+    y: createOneEuroFilter(minCutoffHz, beta),
+    z: createOneEuroFilter(minCutoffHz, beta),
+  };
+}
+
+function createHeadRotationFilters(): HeadRotationFilters {
+  return {
+    roll: createOneEuroFilter(rotationTuning.minCutoffHz, rotationTuning.beta),
+    pitch: createOneEuroFilter(rotationTuning.minCutoffHz, rotationTuning.beta),
+    yaw: createOneEuroFilter(rotationTuning.minCutoffHz, rotationTuning.beta),
+  };
+}
+
+function createTrackingFilters(): TrackingFilters {
+  return {
+    left: createAxisFilters(earAnchorTuning.minCutoffHz, earAnchorTuning.beta),
+    right: createAxisFilters(earAnchorTuning.minCutoffHz, earAnchorTuning.beta),
+    faceScale: createOneEuroFilter(earAnchorTuning.minCutoffHz, earAnchorTuning.beta),
+    headRotation: createHeadRotationFilters(),
   };
 }
 
@@ -401,11 +574,20 @@ function createEarAnchorFilters(): EarAnchorFilters {
  * values every call (not just at construction) so a tuning-panel change
  * takes effect immediately on filters already mid-session: setMinCutoff/
  * setBeta only change the cutoff going forward, they don't reset smoothing
- * state.
+ * state. `minCutoffHz`/`beta` are passed in explicitly (rather than read
+ * from a single shared tuning object) so this same function serves both
+ * earAnchorTuning's position smoothing and rotationTuning's separately-
+ * tuned rotation smoothing.
  */
-function filterScalar(filter: OneEuroFilter, value: number, timestampSeconds: number): number {
-  filter.setMinCutoff(earAnchorTuning.minCutoffHz);
-  filter.setBeta(earAnchorTuning.beta);
+function filterScalar(
+  filter: OneEuroFilter,
+  value: number,
+  timestampSeconds: number,
+  minCutoffHz: number,
+  beta: number,
+): number {
+  filter.setMinCutoff(minCutoffHz);
+  filter.setBeta(beta);
   return filter.filter(value, timestampSeconds);
 }
 
@@ -419,11 +601,49 @@ function filterEarAnchor(
   filters: AxisFilters,
   point: EarAnchorPoint,
   timestampSeconds: number,
+  minCutoffHz: number,
+  beta: number,
 ): EarAnchorPoint {
   return {
-    x: filterScalar(filters.x, point.x, timestampSeconds),
-    y: filterScalar(filters.y, point.y, timestampSeconds),
-    z: filterScalar(filters.z, point.z, timestampSeconds),
+    x: filterScalar(filters.x, point.x, timestampSeconds, minCutoffHz, beta),
+    y: filterScalar(filters.y, point.y, timestampSeconds, minCutoffHz, beta),
+    z: filterScalar(filters.z, point.z, timestampSeconds, minCutoffHz, beta),
+  };
+}
+
+/**
+ * Runs one raw HeadRotation through its roll/pitch/yaw One Euro Filters,
+ * using rotationTuning's own (separately-tuned, deliberately laggier)
+ * minCutoffHz/beta rather than earAnchorTuning's — see RotationTuning's
+ * docstring for why.
+ */
+function filterHeadRotation(
+  filters: HeadRotationFilters,
+  raw: HeadRotation,
+  timestampSeconds: number,
+): HeadRotation {
+  return {
+    rollRadians: filterScalar(
+      filters.roll,
+      raw.rollRadians,
+      timestampSeconds,
+      rotationTuning.minCutoffHz,
+      rotationTuning.beta,
+    ),
+    pitchRadians: filterScalar(
+      filters.pitch,
+      raw.pitchRadians,
+      timestampSeconds,
+      rotationTuning.minCutoffHz,
+      rotationTuning.beta,
+    ),
+    yawRadians: filterScalar(
+      filters.yaw,
+      raw.yawRadians,
+      timestampSeconds,
+      rotationTuning.minCutoffHz,
+      rotationTuning.beta,
+    ),
   };
 }
 
@@ -475,9 +695,9 @@ function resizeCanvasToVideo(canvas: HTMLCanvasElement, video: HTMLVideoElement)
  * landmarker.
  *
  * `onFrame`, if given, is called once per tick with this frame's smoothed
- * ear anchors + faceScale (or `null` on a frame with no detected face) —
- * this is how render.ts drives the Three.js scene off the same detection
- * loop instead of running a second one.
+ * ear anchors + faceScale + headRotation (or `null` on a frame with no
+ * detected face) — this is how render.ts drives the Three.js scene off the
+ * same detection loop instead of running a second one.
  */
 export async function startTracking(
   video: HTMLVideoElement,
@@ -496,7 +716,7 @@ export async function startTracking(
   // doesn't leak into a future call if this is ever invoked again. No
   // explicit cleanup needed: OneEuroFilter/LowPassFilter hold only plain
   // numeric fields, no external resources.
-  const earAnchorFilters = createEarAnchorFilters();
+  const trackingFilters = createTrackingFilters();
 
   let rafHandle = 0;
   let frameCount = 0;
@@ -520,18 +740,29 @@ export async function startTracking(
       // 1eurofilter expects seconds; performance.now() is ms.
       const timestampSeconds = frameStartMs / 1000;
       const smoothedRight = filterEarAnchor(
-        earAnchorFilters.right,
+        trackingFilters.right,
         rawAnchors.right,
         timestampSeconds,
+        earAnchorTuning.minCutoffHz,
+        earAnchorTuning.beta,
       );
       const smoothedLeft = filterEarAnchor(
-        earAnchorFilters.left,
+        trackingFilters.left,
         rawAnchors.left,
         timestampSeconds,
+        earAnchorTuning.minCutoffHz,
+        earAnchorTuning.beta,
       );
       const smoothedFaceScale = filterScalar(
-        earAnchorFilters.faceScale,
+        trackingFilters.faceScale,
         rawAnchors.faceScale,
+        timestampSeconds,
+        earAnchorTuning.minCutoffHz,
+        earAnchorTuning.beta,
+      );
+      const smoothedHeadRotation = filterHeadRotation(
+        trackingFilters.headRotation,
+        rawAnchors.rawHeadRotation,
         timestampSeconds,
       );
 
@@ -539,6 +770,7 @@ export async function startTracking(
         left: smoothedLeft,
         right: smoothedRight,
         faceScale: smoothedFaceScale,
+        headRotation: smoothedHeadRotation,
         timestampMs: frameStartMs,
       });
 

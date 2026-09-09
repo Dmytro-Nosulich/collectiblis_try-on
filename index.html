@@ -65,9 +65,25 @@
       ></canvas>
     </div>
 
+    <div id="debug-tuning-panel" style="margin-top: 1rem; max-width: 420px">
+      <h3 style="margin-bottom: 0.25rem">Ear anchor tuning (debug only)</h3>
+      <p style="margin-top: 0; font-size: 0.85rem; color: #555">
+        Live-adjusts src/tracking.ts's ear anchor constants while tracking runs — no rebuild needed.
+        Offsets are multiples of interocular distance; filter params are Hz / unitless beta.
+      </p>
+      <div id="debug-tuning-sliders"></div>
+      <button
+        id="debug-tuning-reset"
+        type="button"
+        style="margin-top: 0.5rem; font-size: 0.85rem; padding: 0.3rem 0.7rem"
+      >
+        Reset to defaults
+      </button>
+    </div>
+
     <script type="module">
       import { startCamera } from '/src/camera.ts';
-      import { startTracking } from '/src/tracking.ts';
+      import { startTracking, earAnchorTuning, DEFAULT_EAR_ANCHOR_TUNING } from '/src/tracking.ts';
 
       const debugButton = document.getElementById('debug-tracking-button');
       const debugContainer = document.getElementById('debug-tracking-container');
@@ -79,6 +95,61 @@
         debugContainer.style.display = 'block';
         await startCamera(video);
         await startTracking(video, canvas);
+      });
+
+      const TUNING_CONTROLS = [
+        ['outwardFactor', 'Outward factor', 0, 0.4, 0.005],
+        ['downFactor', 'Down factor', 0, 0.8, 0.01],
+        ['backFactor', 'Back (z) factor', 0, 0.3, 0.01],
+        ['yawSensitivity', 'Yaw sensitivity', 0.1, 10, 0.1],
+        ['minCutoffHz', 'Filter min cutoff (Hz)', 0.05, 5, 0.05],
+        ['beta', 'Filter beta', 0, 2, 0.01],
+      ];
+
+      const slidersContainer = document.getElementById('debug-tuning-sliders');
+      const readouts = {};
+
+      for (const [key, label, min, max, step] of TUNING_CONTROLS) {
+        const row = document.createElement('div');
+        row.style.margin = '0.4rem 0';
+
+        const labelEl = document.createElement('label');
+        labelEl.style.cssText = 'display:flex;align-items:center;gap:0.5rem;font-size:0.85rem';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.style.width = '11rem';
+        nameSpan.textContent = label;
+
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = String(min);
+        input.max = String(max);
+        input.step = String(step);
+        input.value = String(earAnchorTuning[key]);
+        input.style.flex = '1';
+
+        const valueSpan = document.createElement('span');
+        valueSpan.style.cssText = 'width:3.5rem;text-align:right';
+        valueSpan.textContent = earAnchorTuning[key].toFixed(3);
+        readouts[key] = { input, valueSpan };
+
+        input.addEventListener('input', () => {
+          const value = parseFloat(input.value);
+          earAnchorTuning[key] = value;
+          valueSpan.textContent = value.toFixed(3);
+        });
+
+        labelEl.append(nameSpan, input, valueSpan);
+        row.append(labelEl);
+        slidersContainer.append(row);
+      }
+
+      document.getElementById('debug-tuning-reset').addEventListener('click', () => {
+        for (const [key] of TUNING_CONTROLS) {
+          earAnchorTuning[key] = DEFAULT_EAR_ANCHOR_TUNING[key];
+          readouts[key].input.value = String(earAnchorTuning[key]);
+          readouts[key].valueSpan.textContent = earAnchorTuning[key].toFixed(3);
+        }
       });
     </script>
   </body>

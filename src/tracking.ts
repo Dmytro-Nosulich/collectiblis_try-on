@@ -7,11 +7,12 @@
  * jitter. See CLAUDE.md "Known technical challenges".
  *
  * Phase 1: raw landmark detection + debug visualization.
- * Phase 2 (this file, so far): ear anchor approximation + One Euro Filter
- * smoothing, still drawn only as debug dots — no earring model yet. The
- * smoothed anchor points are currently private to this file's tick() loop;
- * Phase 3 will need to design how render.ts consumes them each frame
- * (not decided yet).
+ * Phase 2: ear anchor approximation + One Euro Filter smoothing, still
+ * drawn only as debug dots — no earring model yet.
+ * Phase 3: `startTracking` takes an optional per-frame callback
+ * (`TrackingFrameCallback`) so render.ts can consume the same smoothed
+ * anchors (plus faceScale, for on-screen sizing) this file already computes
+ * for its own debug drawing — one detection loop feeds both.
  */
 
 import {
@@ -167,7 +168,8 @@ const RAW_EAR_ANCHOR_COLOR = 'rgba(255, 255, 255, 0.55)'; // dim, shared by both
 const SMOOTHED_RIGHT_EAR_ANCHOR_COLOR = '#ff2d55';
 const SMOOTHED_LEFT_EAR_ANCHOR_COLOR = '#2d7bff';
 
-interface Point3D {
+/** Normalized MediaPipe landmark space: x/y in [0,1] (frame width/height), z a relative depth proxy. */
+export interface EarAnchorPoint {
   x: number;
   y: number;
   z: number;
@@ -179,9 +181,22 @@ interface Vector2 {
 }
 
 interface EarAnchors {
-  left: Point3D;
-  right: Point3D;
+  left: EarAnchorPoint;
+  right: EarAnchorPoint;
+  /** Smoothed interocular distance, normalized by frame width (same units as x) — see render.ts's use as a scale reference. */
+  faceScale: number;
 }
+
+/** One tracking frame's worth of data, handed to render.ts via `onFrame`. */
+export interface TrackingFrame {
+  left: EarAnchorPoint;
+  right: EarAnchorPoint;
+  faceScale: number;
+  timestampMs: number;
+}
+
+/** Called once per detected frame with the smoothed frame data, or with `null` on a frame where no face was detected. */
+export type TrackingFrameCallback = (frame: TrackingFrame | null) => void;
 
 interface AxisFilters {
   x: OneEuroFilter;
@@ -192,6 +207,7 @@ interface AxisFilters {
 interface EarAnchorFilters {
   left: AxisFilters;
   right: AxisFilters;
+  faceScale: OneEuroFilter;
 }
 
 function distance3D(a: NormalizedLandmark, b: NormalizedLandmark): number {
@@ -278,7 +294,7 @@ function computeEarAnchor(
   rollAngleRadians: number,
   yawMagnitude: number,
   aspect: number,
-): Point3D {
+): EarAnchorPoint {
   // Shrinks the outward/back offset toward 0 as the head approaches facing
   // the camera straight-on, and grows it back up to today's calibrated
   // magnitudes as the head turns — see DEFAULT_EAR_ANCHOR_TUNING's
@@ -355,34 +371,42 @@ function computeRawEarAnchors(landmarks: NormalizedLandmark[], aspect: number): 
       yawMagnitude,
       aspect,
     ),
+    faceScale,
   };
+}
+
+function createOneEuroFilter(): OneEuroFilter {
+  return new OneEuroFilter(
+    EAR_ANCHOR_FILTER_INITIAL_FREQ_HZ,
+    earAnchorTuning.minCutoffHz,
+    earAnchorTuning.beta,
+    EAR_ANCHOR_DCUTOFF_HZ,
+  );
 }
 
 function createAxisFilters(): AxisFilters {
-  return {
-    x: new OneEuroFilter(
-      EAR_ANCHOR_FILTER_INITIAL_FREQ_HZ,
-      earAnchorTuning.minCutoffHz,
-      earAnchorTuning.beta,
-      EAR_ANCHOR_DCUTOFF_HZ,
-    ),
-    y: new OneEuroFilter(
-      EAR_ANCHOR_FILTER_INITIAL_FREQ_HZ,
-      earAnchorTuning.minCutoffHz,
-      earAnchorTuning.beta,
-      EAR_ANCHOR_DCUTOFF_HZ,
-    ),
-    z: new OneEuroFilter(
-      EAR_ANCHOR_FILTER_INITIAL_FREQ_HZ,
-      earAnchorTuning.minCutoffHz,
-      earAnchorTuning.beta,
-      EAR_ANCHOR_DCUTOFF_HZ,
-    ),
-  };
+  return { x: createOneEuroFilter(), y: createOneEuroFilter(), z: createOneEuroFilter() };
 }
 
 function createEarAnchorFilters(): EarAnchorFilters {
-  return { left: createAxisFilters(), right: createAxisFilters() };
+  return {
+    left: createAxisFilters(),
+    right: createAxisFilters(),
+    faceScale: createOneEuroFilter(),
+  };
+}
+
+/**
+ * Runs one scalar value through its One Euro Filter. Pulls the live tuning
+ * values every call (not just at construction) so a tuning-panel change
+ * takes effect immediately on filters already mid-session: setMinCutoff/
+ * setBeta only change the cutoff going forward, they don't reset smoothing
+ * state.
+ */
+function filterScalar(filter: OneEuroFilter, value: number, timestampSeconds: number): number {
+  filter.setMinCutoff(earAnchorTuning.minCutoffHz);
+  filter.setBeta(earAnchorTuning.beta);
+  return filter.filter(value, timestampSeconds);
 }
 
 /**
@@ -391,24 +415,20 @@ function createEarAnchorFilters(): EarAnchorFilters {
  * `filters` instance — pass the same per-frame timestamp (converted from
  * `performance.now()` ms to seconds) for both ears each frame.
  */
-function filterEarAnchor(filters: AxisFilters, point: Point3D, timestampSeconds: number): Point3D {
-  // Pulled every call (not just at construction) so a live tuning-panel
-  // change takes effect immediately on filters already mid-session:
-  // setMinCutoff/setBeta only change the cutoff going forward, they don't
-  // reset smoothing state.
-  for (const axisFilter of [filters.x, filters.y, filters.z]) {
-    axisFilter.setMinCutoff(earAnchorTuning.minCutoffHz);
-    axisFilter.setBeta(earAnchorTuning.beta);
-  }
+function filterEarAnchor(
+  filters: AxisFilters,
+  point: EarAnchorPoint,
+  timestampSeconds: number,
+): EarAnchorPoint {
   return {
-    x: filters.x.filter(point.x, timestampSeconds),
-    y: filters.y.filter(point.y, timestampSeconds),
-    z: filters.z.filter(point.z, timestampSeconds),
+    x: filterScalar(filters.x, point.x, timestampSeconds),
+    y: filterScalar(filters.y, point.y, timestampSeconds),
+    z: filterScalar(filters.z, point.z, timestampSeconds),
   };
 }
 
 /** visibility is required by NormalizedLandmark's type but unused for a synthetic drawn point. */
-function toDrawableLandmark(point: Point3D): NormalizedLandmark {
+function toDrawableLandmark(point: EarAnchorPoint): NormalizedLandmark {
   return { x: point.x, y: point.y, z: point.z, visibility: 1 };
 }
 
@@ -453,10 +473,16 @@ function resizeCanvasToVideo(canvas: HTMLCanvasElement, video: HTMLVideoElement)
  * Logs a rolling average frame time/FPS every 30 frames as a performance
  * baseline. Returns a cleanup function that stops the loop and releases the
  * landmarker.
+ *
+ * `onFrame`, if given, is called once per tick with this frame's smoothed
+ * ear anchors + faceScale (or `null` on a frame with no detected face) —
+ * this is how render.ts drives the Three.js scene off the same detection
+ * loop instead of running a second one.
  */
 export async function startTracking(
   video: HTMLVideoElement,
   canvas: HTMLCanvasElement,
+  onFrame?: TrackingFrameCallback,
 ): Promise<() => void> {
   const faceLandmarker = await createFaceLandmarker();
   const ctx = canvas.getContext('2d');
@@ -503,6 +529,18 @@ export async function startTracking(
         rawAnchors.left,
         timestampSeconds,
       );
+      const smoothedFaceScale = filterScalar(
+        earAnchorFilters.faceScale,
+        rawAnchors.faceScale,
+        timestampSeconds,
+      );
+
+      onFrame?.({
+        left: smoothedLeft,
+        right: smoothedRight,
+        faceScale: smoothedFaceScale,
+        timestampMs: frameStartMs,
+      });
 
       // Dim raw anchor dots drawn first, bright smoothed dots on top — lets
       // jitter (raw dot shaking at rest) vs. lag (smoothed dot trailing
@@ -523,6 +561,8 @@ export async function startTracking(
         radius: 5,
         color: SMOOTHED_LEFT_EAR_ANCHOR_COLOR,
       });
+    } else {
+      onFrame?.(null);
     }
 
     frameCount += 1;

@@ -152,5 +152,53 @@
         }
       });
     </script>
+
+    <h2>Phase 3 debug: earring render anchored to ear point</h2>
+    <p>
+      Throwaway debug harness — loads the placeholder earring GLB
+      (<code>vendor/earrings/placeholder-earring.glb</code>, see
+      <code>scripts/generate-placeholder-earring.mjs</code>) and renders it anchored to the smoothed
+      ear points from the pipeline above. Not part of the real <code>openTryOn()</code> flow; delete
+      this block once Phase 5 builds the real UI shell.
+    </p>
+    <button id="debug-render-button">Start camera + earring render debug</button>
+    <div
+      id="debug-render-container"
+      style="position: relative; width: 640px; max-width: 100%; display: none"
+    >
+      <video id="debug-render-video" style="width: 100%; display: block"></video>
+      <canvas
+        id="debug-render-dots-canvas"
+        style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none"
+      ></canvas>
+      <canvas
+        id="debug-render-earring-canvas"
+        style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none"
+      ></canvas>
+    </div>
+
+    <script type="module">
+      import { startCamera } from '/src/camera.ts';
+      import { startTracking } from '/src/tracking.ts';
+      import { createEarringScene } from '/src/render.ts';
+      import { getAssetBaseUrl } from '/src/assets.ts';
+
+      const renderButton = document.getElementById('debug-render-button');
+      const renderContainer = document.getElementById('debug-render-container');
+      const renderVideo = document.getElementById('debug-render-video');
+      const renderDotsCanvas = document.getElementById('debug-render-dots-canvas');
+      const renderEarringCanvas = document.getElementById('debug-render-earring-canvas');
+
+      renderButton.addEventListener('click', async () => {
+        renderButton.disabled = true;
+        renderContainer.style.display = 'block';
+        await startCamera(renderVideo);
+        const glbUrl = `${getAssetBaseUrl()}earrings/placeholder-earring.glb`;
+        const earringScene = await createEarringScene(renderEarringCanvas, renderVideo, glbUrl);
+        await startTracking(renderVideo, renderDotsCanvas, (frame) =>
+          earringScene.updateFrame(frame),
+        );
+      });
+    </script>
   </body>
 </html>

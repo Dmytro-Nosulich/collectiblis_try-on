@@ -14,6 +14,18 @@ const mediapipeWasmDir = 'node_modules/@mediapipe/tasks-vision/wasm';
 // the WASM assets above. Fetch/refresh via `npm run fetch:model`.
 const mediapipeModelDir = 'vendor/mediapipe';
 
+// three.js's own self-contained gltf Draco decoder set (decoder JS + wasm +
+// wrapper). DRACOLoader fetches these by URL at runtime (unlike meshopt
+// decoding, which is a self-contained wasm module bundled straight into the
+// JS import — see render.ts), so they need to be copied/served like the
+// MediaPipe WASM assets above.
+const dracoDecoderDir = 'node_modules/three/examples/jsm/libs/draco/gltf';
+
+// Placeholder earring GLB (Phase 3 debug harness only — see
+// scripts/generate-placeholder-earring.mjs). Real per-product GLBs come
+// from Shopify's own CDN at runtime and are never copied here.
+const placeholderEarringDir = 'vendor/earrings';
+
 export default defineConfig({
   plugins: [
     viteStaticCopy({
@@ -31,6 +43,16 @@ export default defineConfig({
         {
           src: `${mediapipeModelDir}/face_landmarker.task`,
           dest: 'mediapipe/models',
+          rename: { stripBase: true },
+        },
+        {
+          src: `${dracoDecoderDir}/*`,
+          dest: 'draco',
+          rename: { stripBase: true },
+        },
+        {
+          src: `${placeholderEarringDir}/placeholder-earring.glb`,
+          dest: 'earrings',
           rename: { stripBase: true },
         },
       ],

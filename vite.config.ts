@@ -8,6 +8,12 @@ import { viteStaticCopy } from 'vite-plugin-static-copy';
 // vision_wasm_module_internal.* files, halving the copied WASM payload.
 const mediapipeWasmDir = 'node_modules/@mediapipe/tasks-vision/wasm';
 
+// FaceLandmarker's model file, self-hosted rather than fetched from Google's
+// storage URL at runtime — vendored under vendor/ (not npm-managed, not
+// Vite's public/ convention) so this one file can be copied the same way as
+// the WASM assets above. Fetch/refresh via `npm run fetch:model`.
+const mediapipeModelDir = 'vendor/mediapipe';
+
 export default defineConfig({
   plugins: [
     viteStaticCopy({
@@ -20,6 +26,11 @@ export default defineConfig({
         {
           src: `${mediapipeWasmDir}/vision_wasm_nosimd_internal.*`,
           dest: 'mediapipe/wasm',
+          rename: { stripBase: true },
+        },
+        {
+          src: `${mediapipeModelDir}/face_landmarker.task`,
+          dest: 'mediapipe/models',
           rename: { stripBase: true },
         },
       ],

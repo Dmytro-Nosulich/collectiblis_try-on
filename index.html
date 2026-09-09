@@ -46,5 +46,40 @@
         });
       });
     </script>
+
+    <h2>Phase 1 debug: face landmark tracking</h2>
+    <p>
+      Throwaway debug harness — validates MediaPipe FaceLandmarker against a live webcam feed. Not
+      part of the real <code>openTryOn()</code> flow (see <code>src/main.ts</code>); delete this
+      block once Phase 3+ builds the real render pipeline.
+    </p>
+    <button id="debug-tracking-button">Start camera + tracking debug</button>
+    <div
+      id="debug-tracking-container"
+      style="position: relative; width: 640px; max-width: 100%; display: none"
+    >
+      <video id="debug-video" style="width: 100%; display: block"></video>
+      <canvas
+        id="debug-canvas"
+        style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none"
+      ></canvas>
+    </div>
+
+    <script type="module">
+      import { startCamera } from '/src/camera.ts';
+      import { startTracking } from '/src/tracking.ts';
+
+      const debugButton = document.getElementById('debug-tracking-button');
+      const debugContainer = document.getElementById('debug-tracking-container');
+      const video = document.getElementById('debug-video');
+      const canvas = document.getElementById('debug-canvas');
+
+      debugButton.addEventListener('click', async () => {
+        debugButton.disabled = true;
+        debugContainer.style.display = 'block';
+        await startCamera(video);
+        await startTracking(video, canvas);
+      });
+    </script>
   </body>
 </html>

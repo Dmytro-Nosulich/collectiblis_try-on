@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Collectibliss Try-On — dev harness</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 2rem;
+        background: #f7f5f2;
+        color: #222;
+      }
+      button {
+        font-size: 1rem;
+        padding: 0.6rem 1.2rem;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Collectibliss Try-On — dev harness</h1>
+    <p>
+      Not a production page. This stands in for the "Try on" button a Shopify product page /
+      product-card would render, with the GLB URL and product info baked into
+      <code>data-*</code> attributes at Liquid template render time (see Phase 12).
+    </p>
+    <button
+      id="try-on-button"
+      data-product-id="dev-test-product"
+      data-model-url="/placeholder-earring.glb"
+      data-name="Dev Test Earring"
+    >
+      Try on
+    </button>
+
+    <script type="module">
+      import { openTryOn } from '/src/main.ts';
+
+      const button = document.getElementById('try-on-button');
+      button.addEventListener('click', () => {
+        openTryOn({
+          productId: button.dataset.productId,
+          glbUrl: button.dataset.modelUrl,
+          name: button.dataset.name,
+        });
+      });
+    </script>
+  </body>
+</html>

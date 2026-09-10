@@ -220,7 +220,17 @@ export async function createEarringScene(
   video: HTMLVideoElement,
   glbUrl: string,
 ): Promise<EarringScene> {
-  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  const renderer = new THREE.WebGLRenderer({
+    canvas,
+    alpha: true,
+    antialias: true,
+    // Phase 6's snapshot capture reads this canvas's pixels via drawImage
+    // well after the render call (after a 3-2-1 countdown, not
+    // synchronously inside updateFrame) — without this, the browser is
+    // free to clear/swap the drawing buffer once it's done compositing to
+    // screen, so the readback isn't guaranteed to see the last frame.
+    preserveDrawingBuffer: true,
+  });
   // alpha: true alone already defaults WebGLRenderer's clear alpha to 0;
   // set explicitly anyway as documentation against relying on an unstated
   // default. Do NOT call renderer.setPixelRatio(): leaving it at 1 is what

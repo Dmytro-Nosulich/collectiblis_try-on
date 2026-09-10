@@ -19,6 +19,9 @@ import type { TryOnOptions } from '../main.ts';
 import { startCamera, stopCamera, type CameraSession } from '../camera.ts';
 import { startTracking, type TrackingFrame } from '../tracking.ts';
 import { createEarringScene, type EarringScene } from '../render.ts';
+import { captureMirroredComposite } from './capture.ts';
+import { renderCountdown } from './countdownOverlay.ts';
+import { createReviewScreen, type ReviewScreen } from './reviewScreen.ts';
 
 export interface LiveTryOnHandlers {
   onBackToChooser(): void;
@@ -81,11 +84,20 @@ interface LiveViewElements {
   root: HTMLElement;
   video: HTMLVideoElement;
   canvas: HTMLCanvasElement;
+  liveStage: HTMLElement;
+  captureButton: HTMLButtonElement;
 }
 
 function createLiveViewElements(): LiveViewElements {
   const root = document.createElement('div');
   root.className = 'live-view';
+
+  // .live-stage is a plain (non-mirrored) positioning context, separate
+  // from .mirror-wrapper, specifically so the countdown overlay (mounted
+  // into liveStage, not mirrorWrapper) doesn't inherit mirrorWrapper's
+  // scaleX(-1) and render its digits backwards.
+  const liveStage = document.createElement('div');
+  liveStage.className = 'live-stage';
 
   const mirrorWrapper = document.createElement('div');
   mirrorWrapper.className = 'mirror-wrapper';
@@ -99,9 +111,16 @@ function createLiveViewElements(): LiveViewElements {
   canvas.className = 'live-canvas';
 
   mirrorWrapper.append(video, canvas);
-  root.append(mirrorWrapper);
+  liveStage.append(mirrorWrapper);
 
-  return { root, video, canvas };
+  const captureButton = document.createElement('button');
+  captureButton.type = 'button';
+  captureButton.className = 'button button--primary capture-button';
+  captureButton.textContent = 'Capture';
+
+  root.append(liveStage, captureButton);
+
+  return { root, video, canvas, liveStage, captureButton };
 }
 
 /**
@@ -119,13 +138,53 @@ export function renderLiveTryOn(
   let trackingCleanup: (() => void) | undefined;
   let earringScene: EarringScene | undefined;
   let cancelled = false;
+  let cancelCountdown: (() => void) | undefined;
+  let reviewScreen: ReviewScreen | undefined;
 
   function handleFrame(frame: TrackingFrame | null): void {
     earringScene?.updateFrame(frame);
   }
 
   async function start(): Promise<void> {
-    const { root, video, canvas } = createLiveViewElements();
+    const { root, video, canvas, liveStage, captureButton } = createLiveViewElements();
+
+    function handleRetake(): void {
+      reviewScreen?.dispose();
+      reviewScreen = undefined;
+      root.classList.remove('is-reviewing');
+      captureButton.hidden = false;
+    }
+
+    function startCountdownAndCapture(): void {
+      captureButton.hidden = true;
+      cancelCountdown = renderCountdown(liveStage, () => {
+        cancelCountdown = undefined;
+        captureMirroredComposite(video, canvas).then(
+          (blob) => {
+            // Covers the race where the modal was closed in the gap
+            // between the countdown completing and this promise
+            // resolving — renderCountdown's own cancel() only stops a
+            // *pending* timer, it can't un-fire a callback that already
+            // ran.
+            if (cancelled) {
+              return;
+            }
+            reviewScreen = createReviewScreen(blob, { onRetake: handleRetake });
+            root.classList.add('is-reviewing');
+            root.append(reviewScreen.root);
+          },
+          (error: unknown) => {
+            if (cancelled) {
+              return;
+            }
+            console.error('[CollectiblissTryOn] snapshot capture failed', error);
+            captureButton.hidden = false;
+          },
+        );
+      });
+    }
+
+    captureButton.addEventListener('click', startCountdownAndCapture);
 
     let session: CameraSession;
     try {
@@ -169,6 +228,10 @@ export function renderLiveTryOn(
 
   return function dispose(): void {
     cancelled = true;
+    cancelCountdown?.();
+    cancelCountdown = undefined;
+    reviewScreen?.dispose();
+    reviewScreen = undefined;
     trackingCleanup?.();
     earringScene?.dispose();
     if (cameraSession) {

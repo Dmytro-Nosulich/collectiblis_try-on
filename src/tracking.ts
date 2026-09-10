@@ -694,6 +694,15 @@ function resizeCanvasToVideo(canvas: HTMLCanvasElement, video: HTMLVideoElement)
  * baseline. Returns a cleanup function that stops the loop and releases the
  * landmarker.
  *
+ * `canvas` is optional (pass `null`) for callers that only want `onFrame`'s
+ * data and don't want the debug dots drawn — the real Live Try-On view
+ * (Phase 5) passes its own canvas to render.ts's WebGL scene instead, and a
+ * `<canvas>` element can only ever have one kind of rendering context
+ * ('2d' XOR 'webgl'), so it can't reuse that same canvas for this debug
+ * overlay. Skipping the 2D draw calls entirely when `canvas` is `null` also
+ * avoids paying for ~480 unseen drawLandmarks calls every frame in
+ * production.
+ *
  * `onFrame`, if given, is called once per tick with this frame's smoothed
  * ear anchors + faceScale + headRotation (or `null` on a frame with no
  * detected face) — this is how render.ts drives the Three.js scene off the
@@ -701,15 +710,15 @@ function resizeCanvasToVideo(canvas: HTMLCanvasElement, video: HTMLVideoElement)
  */
 export async function startTracking(
   video: HTMLVideoElement,
-  canvas: HTMLCanvasElement,
+  canvas: HTMLCanvasElement | null,
   onFrame?: TrackingFrameCallback,
 ): Promise<() => void> {
   const faceLandmarker = await createFaceLandmarker();
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
+  const ctx = canvas ? canvas.getContext('2d') : null;
+  if (canvas && !ctx) {
     throw new Error('[CollectiblissTryOn] 2D canvas context unavailable');
   }
-  const drawingUtils = new DrawingUtils(ctx);
+  const drawingUtils = ctx ? new DrawingUtils(ctx) : null;
 
   // Created once per startTracking() call, alongside faceLandmarker, so
   // filter state persists across frames (that's what smooths anything) but
@@ -729,13 +738,17 @@ export async function startTracking(
     const result = faceLandmarker.detectForVideo(video, frameStartMs);
     const frameTimeMs = performance.now() - frameStartMs;
 
-    resizeCanvasToVideo(canvas, video);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (canvas && ctx) {
+      resizeCanvasToVideo(canvas, video);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
     const landmarks = result.faceLandmarks[0];
     if (landmarks) {
-      drawingUtils.drawLandmarks(landmarks, { radius: 1.5, color: '#00ff88' });
+      drawingUtils?.drawLandmarks(landmarks, { radius: 1.5, color: '#00ff88' });
 
-      const aspect = canvas.width / canvas.height;
+      // video's own intrinsic dimensions, not canvas.width/height — those
+      // only exist (and match the video) when a debug canvas was passed.
+      const aspect = video.videoWidth / video.videoHeight;
       const rawAnchors = computeRawEarAnchors(landmarks, aspect);
       // 1eurofilter expects seconds; performance.now() is ms.
       const timestampSeconds = frameStartMs / 1000;
@@ -777,19 +790,19 @@ export async function startTracking(
       // Dim raw anchor dots drawn first, bright smoothed dots on top — lets
       // jitter (raw dot shaking at rest) vs. lag (smoothed dot trailing
       // during motion) be judged in the same view.
-      drawingUtils.drawLandmarks([toDrawableLandmark(rawAnchors.right)], {
+      drawingUtils?.drawLandmarks([toDrawableLandmark(rawAnchors.right)], {
         radius: 3,
         color: RAW_EAR_ANCHOR_COLOR,
       });
-      drawingUtils.drawLandmarks([toDrawableLandmark(rawAnchors.left)], {
+      drawingUtils?.drawLandmarks([toDrawableLandmark(rawAnchors.left)], {
         radius: 3,
         color: RAW_EAR_ANCHOR_COLOR,
       });
-      drawingUtils.drawLandmarks([toDrawableLandmark(smoothedRight)], {
+      drawingUtils?.drawLandmarks([toDrawableLandmark(smoothedRight)], {
         radius: 5,
         color: SMOOTHED_RIGHT_EAR_ANCHOR_COLOR,
       });
-      drawingUtils.drawLandmarks([toDrawableLandmark(smoothedLeft)], {
+      drawingUtils?.drawLandmarks([toDrawableLandmark(smoothedLeft)], {
         radius: 5,
         color: SMOOTHED_LEFT_EAR_ANCHOR_COLOR,
       });

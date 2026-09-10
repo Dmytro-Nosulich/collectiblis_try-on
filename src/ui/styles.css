@@ -1,0 +1,251 @@
+/*
+ * All widget CSS. Injected as a single <style> element inside the modal's
+ * shadow root (see modal.ts) — the shadow root already isolates this from
+ * the host Shopify theme in both directions, so class names are plain, not
+ * prefixed. Mobile breakpoint (640px) matches the width the Phase 1-4 debug
+ * harnesses already used in index.html.
+ */
+
+:host,
+* {
+  box-sizing: border-box;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 15, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+.panel {
+  position: relative;
+  width: 100%;
+  max-width: 30rem;
+  max-height: 90vh;
+  background: #fdfcfa;
+  color: #222;
+  border-radius: 0.75rem;
+  box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.5rem 0.5rem 0;
+  flex: none;
+}
+
+.close-button {
+  appearance: none;
+  border: none;
+  background: rgba(0, 0, 0, 0.06);
+  color: #222;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.close-button:hover {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.content {
+  padding: 0.5rem 1.5rem 1.5rem;
+  overflow-y: auto;
+}
+
+/* Mobile: full-screen takeover instead of a centered card. */
+@media (max-width: 640px) {
+  .overlay {
+    padding: 0;
+  }
+
+  .panel {
+    max-width: none;
+    max-height: none;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
+}
+
+/* --- Mode chooser --------------------------------------------------- */
+
+.mode-chooser-title {
+  margin: 0.25rem 0 1rem;
+  font-size: 1.25rem;
+}
+
+.mode-tiles {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.mode-tile {
+  appearance: none;
+  text-align: left;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.mode-tile:hover:not(.mode-tile--disabled) {
+  border-color: #b08d57;
+}
+
+.mode-tile--disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.mode-tile-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+}
+
+.mode-tile-badge {
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #8a7a5c;
+  background: rgba(176, 141, 87, 0.15);
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
+
+.mode-tile-desc {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.privacy-line {
+  margin: 0.9rem 0 0;
+  font-size: 0.8rem;
+  color: #666;
+  text-align: center;
+}
+
+/* --- Loading / error states ------------------------------------------ */
+
+.state-centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  padding: 2.5rem 1rem;
+  text-align: center;
+}
+
+.spinner {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  border: 3px solid rgba(0, 0, 0, 0.1);
+  border-top-color: #b08d57;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.state-status {
+  margin: 0;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.error-message {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.error-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 20rem;
+}
+
+.button {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  padding: 0.6rem 1rem;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.button--secondary {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.15);
+  color: #222;
+}
+
+.button--secondary:hover {
+  border-color: #b08d57;
+}
+
+/* --- Live view --------------------------------------------------------- */
+
+.live-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mirror-wrapper {
+  position: relative;
+  width: 100%;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: #111;
+  /* Mirrors the composited video+canvas together, post-render, so they stay
+     pixel-aligned with zero changes to tracking.ts/render.ts's anchor math —
+     see build-progress.md's Phase 5 entry. */
+  transform: scaleX(-1);
+}
+
+.live-video {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.live-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}

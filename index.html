@@ -28,7 +28,7 @@
     <button
       id="try-on-button"
       data-product-id="dev-test-product"
-      data-model-url="/placeholder-earring.glb"
+      data-model-url="/earrings/placeholder-earring.glb"
       data-name="Dev Test Earring"
     >
       Try on
@@ -50,8 +50,11 @@
     <h2>Phase 1 debug: face landmark tracking</h2>
     <p>
       Throwaway debug harness — validates MediaPipe FaceLandmarker against a live webcam feed. Not
-      part of the real <code>openTryOn()</code> flow (see <code>src/main.ts</code>); delete this
-      block once Phase 3+ builds the real render pipeline.
+      part of the real <code>openTryOn()</code> flow (see <code>src/main.ts</code>), which now opens
+      the actual modal UI (Phase 5) via the button above. <strong>Intentionally kept</strong>
+      past Phase 5 — Phase 4's rotation tuning still needs a real webcam verification pass (see
+      <code>.claude/build-progress.md</code>), and this is the tool for it. Delete once that tuning
+      pass is confirmed done.
     </p>
     <button id="debug-tracking-button">Start camera + tracking debug</button>
     <div
@@ -208,7 +211,9 @@
       Throwaway debug harness — loads a placeholder earring GLB (<code>vendor/earrings/</code>, see
       <code>scripts/generate-placeholder-earring.mjs</code>) and renders it anchored + rotated to
       the smoothed head pose from the pipeline above. Not part of the real
-      <code>openTryOn()</code> flow; delete this block once Phase 5 builds the real UI shell.
+      <code>openTryOn()</code> flow. <strong>Intentionally kept</strong> past Phase 5, same reason
+      as the block above — this is the live-tuning panel for Phase 4's still-outstanding rotation
+      sign/sensitivity verification pass. Delete once that's confirmed done.
     </p>
     <button id="debug-render-button">Start camera + earring render debug</button>
     <label style="margin-left: 1rem; font-size: 0.9rem">

@@ -27,6 +27,11 @@ const dracoDecoderDir = 'node_modules/three/examples/jsm/libs/draco/gltf';
 // Shopify's own CDN at runtime and are never copied here.
 const placeholderEarringDir = 'vendor/earrings';
 
+// Curated "Choose a Model" photos (Phase 10) — free-license placeholders,
+// see src/ui/modelPhotos.ts for the source/license record. Flagged there
+// for replacement with final licensed photos before launch.
+const curatedModelPhotosDir = 'vendor/model-photos';
+
 export default defineConfig({
   plugins: [
     viteStaticCopy({
@@ -54,6 +59,11 @@ export default defineConfig({
         {
           src: `${placeholderEarringDir}/placeholder-earring*.glb`,
           dest: 'earrings',
+          rename: { stripBase: true },
+        },
+        {
+          src: `${curatedModelPhotosDir}/*`,
+          dest: 'model-photos',
           rename: { stripBase: true },
         },
       ],

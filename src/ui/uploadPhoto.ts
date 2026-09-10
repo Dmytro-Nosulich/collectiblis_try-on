@@ -10,7 +10,9 @@
  * to.
  *
  * Structurally mirrors liveTryOn.ts: a `cancelled` flag checked after every
- * `await`, and a returned `dispose()` safe to call from any state.
+ * `await`, and a returned `dispose()` safe to call from any state. The
+ * processing/error states are shared with Choose a Model (Phase 10) via
+ * staticPhotoStates.ts.
  */
 
 import type { TryOnOptions } from '../main.ts';
@@ -19,65 +21,16 @@ import { createImageFaceLandmarker, detectEarAnchorsForImage } from '../tracking
 import { createEarringScene, type EarringScene } from '../render.ts';
 import { compositeEarringOntoImage } from './capture.ts';
 import { createReviewScreen, type ReviewScreen } from './reviewScreen.ts';
+import { createProcessingState, createErrorState } from './staticPhotoStates.ts';
 
 export interface UploadPhotoHandlers {
   onBackToChooser(): void;
 }
 
-const STATUS_PLACING_EARRING = 'Placing the earring...';
-
 // Same copy/class as modeChooser.ts's own privacy line — duplicated rather
 // than exported/shared, since it's one string constant and this file
 // otherwise has no dependency on modeChooser.ts.
 const PRIVACY_LINE = 'Nothing is uploaded — this stays on your device.';
-
-function createProcessingState(): HTMLElement {
-  const wrap = document.createElement('div');
-  wrap.className = 'state-centered';
-
-  const spinner = document.createElement('div');
-  spinner.className = 'spinner';
-
-  const status = document.createElement('p');
-  status.className = 'state-status';
-  status.textContent = STATUS_PLACING_EARRING;
-
-  wrap.append(spinner, status);
-  return wrap;
-}
-
-/** Shared by every failure case (bad file, undecodable file, no face detected, model load failure) — only the message differs. */
-function createErrorState(
-  message: string,
-  onTryAgain: () => void,
-  onBackToChooser: () => void,
-): HTMLElement {
-  const wrap = document.createElement('div');
-  wrap.className = 'state-centered';
-
-  const messageEl = document.createElement('p');
-  messageEl.className = 'error-message';
-  messageEl.textContent = message;
-
-  const actions = document.createElement('div');
-  actions.className = 'error-actions';
-
-  const tryAgainButton = document.createElement('button');
-  tryAgainButton.type = 'button';
-  tryAgainButton.className = 'button button--primary';
-  tryAgainButton.textContent = 'Try a different photo';
-  tryAgainButton.addEventListener('click', onTryAgain);
-
-  const backButton = document.createElement('button');
-  backButton.type = 'button';
-  backButton.className = 'button button--secondary';
-  backButton.textContent = 'Back to options';
-  backButton.addEventListener('click', onBackToChooser);
-
-  actions.append(tryAgainButton, backButton);
-  wrap.append(messageEl, actions);
-  return wrap;
-}
 
 function createPickerState(
   onFileSelected: (file: File) => void,

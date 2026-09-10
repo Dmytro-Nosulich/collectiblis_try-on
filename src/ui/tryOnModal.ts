@@ -1,7 +1,7 @@
 /**
  * Top-level orchestrator: opens the modal shell, shows the mode chooser
- * first, and swaps in Live Try-On or Upload Photo when picked. This is what
- * main.ts's real openTryOn() calls.
+ * first, and swaps in Live Try-On, Upload Photo, or Choose a Model when
+ * picked. This is what main.ts's real openTryOn() calls.
  */
 
 import type { TryOnOptions } from '../main.ts';
@@ -9,6 +9,7 @@ import { createModalShell } from './modal.ts';
 import { renderModeChooser } from './modeChooser.ts';
 import { renderLiveTryOn } from './liveTryOn.ts';
 import { renderUploadPhoto } from './uploadPhoto.ts';
+import { renderChooseModel } from './chooseModel.ts';
 
 // A second openTryOn() call while one is already open is a no-op rather
 // than stacking modals — v1 has no defined behavior for concurrent try-on
@@ -44,6 +45,11 @@ export function openTryOnModal(options: TryOnOptions): void {
       },
       onUploadPhoto: () => {
         activeModeCleanup = renderUploadPhoto(shell.contentEl, options, {
+          onBackToChooser: showModeChooser,
+        });
+      },
+      onChooseModel: () => {
+        activeModeCleanup = renderChooseModel(shell.contentEl, options, {
           onBackToChooser: showModeChooser,
         });
       },

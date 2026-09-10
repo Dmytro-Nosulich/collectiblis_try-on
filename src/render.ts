@@ -218,9 +218,10 @@ export interface EarringScene {
  * path above is one of this widget's own bundled runtime assets.
  *
  * `source` is a live `<video>` for Live Try-On (Phases 5-8) or a fully
- * decoded `<img>` for Upload Photo (Phase 9) — see syncSizeToSource. Either
- * way the caller must guarantee valid intrinsic dimensions before calling
- * this (a ready camera stream, or an already-`decode()`d image).
+ * decoded `<img>` for Upload Photo (Phase 9) / Choose a Model (Phase 10) —
+ * see syncSizeToSource. Either way the caller must guarantee valid
+ * intrinsic dimensions before calling this (a ready camera stream, or an
+ * already-`decode()`d image).
  */
 export async function createEarringScene(
   canvas: HTMLCanvasElement,

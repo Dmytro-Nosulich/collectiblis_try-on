@@ -131,7 +131,7 @@ function createLiveViewElements(): LiveViewElements {
  */
 export function renderLiveTryOn(
   container: HTMLElement,
-  options: Pick<TryOnOptions, 'glbUrl'>,
+  options: Pick<TryOnOptions, 'glbUrl' | 'name'>,
   handlers: LiveTryOnHandlers,
 ): () => void {
   let cameraSession: CameraSession | undefined;
@@ -169,7 +169,7 @@ export function renderLiveTryOn(
             if (cancelled) {
               return;
             }
-            reviewScreen = createReviewScreen(blob, { onRetake: handleRetake });
+            reviewScreen = createReviewScreen(blob, options.name, { onRetake: handleRetake });
             root.classList.add('is-reviewing');
             root.append(reviewScreen.root);
           },

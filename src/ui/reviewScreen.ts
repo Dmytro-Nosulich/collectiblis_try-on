@@ -1,12 +1,15 @@
 /**
  * The post-capture review screen: shows the captured photo with a Retake
- * option and a placeholder for real share buttons (Phase 7).
+ * option and the real share buttons (Phase 7 — see share.ts for the actual
+ * Web Share / download / Pinterest / Facebook logic).
  *
  * A passive factory, not a render*() that owns a container — liveTryOn.ts
  * needs to append this into its already-live root and later remove it on
  * retake, rather than wholesale-replacing a container the way
  * renderModeChooser/renderLiveTryOn do.
  */
+
+import { createShareSection } from './share.ts';
 
 export interface ReviewScreenHandlers {
   onRetake(): void;
@@ -18,22 +21,11 @@ export interface ReviewScreen {
   dispose(): void;
 }
 
-/**
- * Phase 7's extension point: replace this function's body with the real
- * Web Share / download / Pinterest / Facebook buttons described in
- * build-plan.md's Phase 7 prompt (they'll need the photoBlob passed in via
- * createReviewScreen's closure). Kept as a named function rather than bare
- * markup inlined into createReviewScreen, so Phase 7 has one obvious place
- * to extend without touching liveTryOn.ts's state machine.
- */
-function createSharePlaceholder(): HTMLElement {
-  const placeholder = document.createElement('div');
-  placeholder.className = 'review-share-placeholder';
-  placeholder.textContent = 'Share options coming soon';
-  return placeholder;
-}
-
-export function createReviewScreen(photoBlob: Blob, handlers: ReviewScreenHandlers): ReviewScreen {
+export function createReviewScreen(
+  photoBlob: Blob,
+  productName: string,
+  handlers: ReviewScreenHandlers,
+): ReviewScreen {
   const objectUrl = URL.createObjectURL(photoBlob);
 
   const root = document.createElement('div');
@@ -54,7 +46,7 @@ export function createReviewScreen(photoBlob: Blob, handlers: ReviewScreenHandle
   retakeButton.addEventListener('click', () => handlers.onRetake());
 
   actions.append(retakeButton);
-  root.append(photo, actions, createSharePlaceholder());
+  root.append(photo, actions, createShareSection(photoBlob, productName));
 
   let disposed = false;
   function dispose(): void {

@@ -334,11 +334,18 @@
   align-self: center;
 }
 
-.review-share-placeholder {
-  border: 1px dashed rgba(0, 0, 0, 0.2);
-  border-radius: 0.5rem;
-  padding: 1rem;
+.share-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 20rem;
+  align-self: center;
+}
+
+.share-hint {
+  margin: 0;
+  color: #555;
+  font-size: 0.8rem;
   text-align: center;
-  color: #888;
-  font-size: 0.85rem;
 }

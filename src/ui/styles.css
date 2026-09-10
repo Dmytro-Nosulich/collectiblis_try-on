@@ -406,3 +406,55 @@
   font-size: 0.8rem;
   text-align: center;
 }
+
+/* --- Upload Photo (Phase 9) --------------------------------------------- */
+
+.upload-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.upload-picker-title {
+  margin: 0.25rem 0 0;
+  font-size: 1.25rem;
+}
+
+.upload-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  text-align: center;
+  border: 2px dashed rgba(0, 0, 0, 0.2);
+  border-radius: 0.5rem;
+  padding: 2.5rem 1rem;
+  cursor: pointer;
+  color: #555;
+  font-size: 0.95rem;
+}
+
+.upload-dropzone:hover,
+.upload-dropzone--drag-over {
+  border-color: #b08d57;
+  background: rgba(176, 141, 87, 0.06);
+}
+
+.upload-dropzone-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #888;
+}
+
+/* Visually hidden but still focusable/keyboard-operable — NOT display:none,
+   which breaks label-click/keyboard activation of the input in some
+   browsers. */
+.upload-dropzone-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

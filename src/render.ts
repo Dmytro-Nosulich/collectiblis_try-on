@@ -2,12 +2,14 @@
  * 3D rendering: sets up a Three.js scene with a transparent-background
  * WebGLRenderer, loads earring GLB models via GLTFLoader (with
  * DRACOLoader/meshopt for compressed GLB), and positions/rotates the
- * loaded model at the smoothed ear anchor from tracking.ts each frame.
- * The resulting canvas is layered on top of the `<video>` element to
- * composite the AR overlay over the camera feed.
+ * loaded model at the ear anchor from tracking.ts each frame. The
+ * resulting canvas is layered on top of the video (Live Try-On) or image
+ * (Upload Photo) element it's tracking to composite the AR overlay.
  *
  * Implemented in Phase 3 (anchored placement) and Phase 4 (orientation/hang
- * tuning as the head tilts).
+ * tuning as the head tilts). Phase 9 widens createEarringScene's source
+ * parameter to also accept a decoded `<img>`, for one-shot placement on an
+ * uploaded photo instead of a live camera feed.
  */
 
 import * as THREE from 'three';
@@ -206,7 +208,7 @@ export interface EarringScene {
 }
 
 /**
- * Sets up a Three.js scene layered on top of `video` (via `canvas`,
+ * Sets up a Three.js scene layered on top of `source` (via `canvas`,
  * positioned by the caller the same way the Phase 1/2 debug canvas is) and
  * loads `glbUrl` once, instancing it onto both ears (mirrored — see
  * createEarInstance). `glbUrl` is taken as a fully-resolved absolute URL,
@@ -214,10 +216,15 @@ export interface EarringScene {
  * arbitrary Shopify CDN URL (TryOnOptions.glbUrl) with nothing to do with
  * where this widget's own script was loaded from — only the Draco decoder
  * path above is one of this widget's own bundled runtime assets.
+ *
+ * `source` is a live `<video>` for Live Try-On (Phases 5-8) or a fully
+ * decoded `<img>` for Upload Photo (Phase 9) — see syncSizeToSource. Either
+ * way the caller must guarantee valid intrinsic dimensions before calling
+ * this (a ready camera stream, or an already-`decode()`d image).
  */
 export async function createEarringScene(
   canvas: HTMLCanvasElement,
-  video: HTMLVideoElement,
+  source: HTMLVideoElement | HTMLImageElement,
   glbUrl: string,
 ): Promise<EarringScene> {
   const renderer = new THREE.WebGLRenderer({
@@ -270,24 +277,36 @@ export async function createEarringScene(
   keyLight.position.set(0.5, 1, 1);
   scene.add(keyLight);
 
-  function syncSizeToVideo(): void {
-    const { videoWidth, videoHeight } = video;
-    if (canvas.width === videoWidth && canvas.height === videoHeight) {
+  // <video> and <img> expose their intrinsic pixel size under different
+  // property names (videoWidth/videoHeight vs. naturalWidth/naturalHeight)
+  // — this is the one place that difference matters, everything else below
+  // operates purely in canvas.width/height pixel space regardless of source.
+  function getSourceDimensions(): { width: number; height: number } {
+    if (source instanceof HTMLVideoElement) {
+      return { width: source.videoWidth, height: source.videoHeight };
+    }
+    return { width: source.naturalWidth, height: source.naturalHeight };
+  }
+
+  function syncSizeToSource(): void {
+    const { width, height } = getSourceDimensions();
+    if (canvas.width === width && canvas.height === height) {
       return;
     }
-    canvas.width = videoWidth;
-    canvas.height = videoHeight;
-    renderer.setSize(videoWidth, videoHeight, false);
-    camera.right = videoWidth;
-    camera.bottom = videoHeight;
+    canvas.width = width;
+    canvas.height = height;
+    renderer.setSize(width, height, false);
+    camera.right = width;
+    camera.bottom = height;
     camera.updateProjectionMatrix();
   }
 
-  // Run once up front too: startCamera() (the caller's precondition)
-  // already guarantees valid videoWidth/videoHeight, so this avoids
-  // briefly building the renderer/camera against the <canvas> element's
-  // 300x150 HTML default before the first updateFrame() resize check runs.
-  syncSizeToVideo();
+  // Run once up front too: the caller's precondition (a ready camera stream,
+  // or an already-decode()d image) already guarantees valid dimensions, so
+  // this avoids briefly building the renderer/camera against the <canvas>
+  // element's 300x150 HTML default before the first updateFrame() resize
+  // check runs.
+  syncSizeToSource();
 
   // Loaded once (not once per ear) to avoid a duplicate network fetch +
   // duplicate Draco decode; each ear gets its own clone (see
@@ -301,7 +320,7 @@ export async function createEarringScene(
   scene.add(rightEar.anchorGroup, leftEar.anchorGroup);
 
   function updateFrame(frame: TrackingFrame | null): void {
-    syncSizeToVideo();
+    syncSizeToSource();
     if (frame) {
       placeEar(
         rightEar.anchorGroup,

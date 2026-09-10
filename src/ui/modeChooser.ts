@@ -1,12 +1,12 @@
 /**
  * The mode-chooser screen: three tiles (Live Try-On, Use a Photo, Choose a
- * Model), shown first, per docs/step2-design-decisions.md. Use a
- * Photo/Choose a Model are visibly disabled stubs until Phases 9-10 build
- * them.
+ * Model), shown first, per docs/step2-design-decisions.md. Choose a Model
+ * is still a visibly disabled stub until Phase 10 builds it.
  */
 
 export interface ModeChooserHandlers {
   onLiveTryOn(): void;
+  onUploadPhoto(): void;
 }
 
 const PRIVACY_LINE = 'Nothing is uploaded — this stays on your device.';
@@ -65,7 +65,8 @@ export function renderModeChooser(container: HTMLElement, handlers: ModeChooserH
     createTile({
       title: 'Use a Photo',
       description: 'Upload a photo of yourself instead.',
-      disabled: true,
+      disabled: false,
+      onSelect: handlers.onUploadPhoto,
     }),
     createTile({
       title: 'Choose a Model',

@@ -13,6 +13,8 @@ import { createShareSection } from './share.ts';
 
 export interface ReviewScreenHandlers {
   onRetake(): void;
+  /** Defaults to 'Retake'. Upload Photo (Phase 9) passes 'Choose a different photo' instead, since "retake" doesn't describe re-uploading. */
+  retakeLabel?: string;
 }
 
 export interface ReviewScreen {
@@ -42,7 +44,7 @@ export function createReviewScreen(
   const retakeButton = document.createElement('button');
   retakeButton.type = 'button';
   retakeButton.className = 'button button--secondary';
-  retakeButton.textContent = 'Retake';
+  retakeButton.textContent = handlers.retakeLabel ?? 'Retake';
   retakeButton.addEventListener('click', () => handlers.onRetake());
 
   actions.append(retakeButton);

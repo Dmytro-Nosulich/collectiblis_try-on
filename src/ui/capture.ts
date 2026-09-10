@@ -1,18 +1,36 @@
 /**
- * Composites the current video frame + Three.js earring overlay into a
- * single mirrored PNG blob — what the snapshot button in liveTryOn.ts
- * actually captures.
+ * Composites a source (live video frame, or a static uploaded photo) +
+ * Three.js earring overlay into a single PNG blob.
  *
- * There is no canvas anywhere in the pipeline that already holds mirrored
- * pixels: the on-screen "mirror" effect is purely a CSS `transform:
- * scaleX(-1)` on `.mirror-wrapper` (see liveTryOn.ts's header comment), so
- * this function has to redo that mirroring itself when drawing into an
+ * captureMirroredComposite (Live Try-On, Phase 6) manually mirrors before
+ * drawing: there is no canvas anywhere in the live pipeline that already
+ * holds mirrored pixels, since the on-screen "mirror" effect is purely a
+ * CSS `transform: scaleX(-1)` on `.mirror-wrapper` (see liveTryOn.ts's
+ * header comment) — this redoes that mirroring when drawing into an
  * offscreen canvas, to produce an exported image matching what the user
  * actually saw and posed for (the project's explicit decision, not a "true"
  * unflipped orientation).
+ *
+ * compositeEarringOntoImage (Upload Photo, Phase 9) has no such mirror
+ * step: an uploaded photo has no mirror-display convention anywhere in its
+ * pipeline (mirroring is specific to Live Try-On's self-view convention),
+ * so mirroring here would flip the output backwards relative to the photo
+ * the user actually chose.
  */
 
 const ERROR_PREFIX = '[CollectiblissTryOn]';
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+      } else {
+        reject(new Error(`${ERROR_PREFIX} failed to export capture as a PNG blob`));
+      }
+    }, 'image/png');
+  });
+}
 
 export function captureMirroredComposite(
   video: HTMLVideoElement,
@@ -44,13 +62,30 @@ export function captureMirroredComposite(
   ctx.drawImage(video, 0, 0, width, height);
   ctx.drawImage(canvas, 0, 0, width, height);
 
-  return new Promise<Blob>((resolve, reject) => {
-    output.toBlob((blob) => {
-      if (blob) {
-        resolve(blob);
-      } else {
-        reject(new Error(`${ERROR_PREFIX} failed to export capture as a PNG blob`));
-      }
-    }, 'image/png');
-  });
+  return canvasToPngBlob(output);
+}
+
+/**
+ * Static-photo counterpart to captureMirroredComposite (Phase 9) — see this
+ * file's header comment for why there's deliberately no mirror step here.
+ */
+export function compositeEarringOntoImage(
+  image: HTMLImageElement,
+  earringCanvas: HTMLCanvasElement,
+): Promise<Blob> {
+  const width = image.naturalWidth;
+  const height = image.naturalHeight;
+
+  const output = document.createElement('canvas');
+  output.width = width;
+  output.height = height;
+  const ctx = output.getContext('2d');
+  if (!ctx) {
+    return Promise.reject(new Error(`${ERROR_PREFIX} could not get a 2D context for compositing`));
+  }
+
+  ctx.drawImage(image, 0, 0, width, height);
+  ctx.drawImage(earringCanvas, 0, 0, width, height);
+
+  return canvasToPngBlob(output);
 }

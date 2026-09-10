@@ -17,6 +17,11 @@
  * its own separately-tuned One Euro filters (`RotationTuning`), so
  * render.ts can rotate the earring model itself instead of just its anchor
  * position.
+ * Phase 9: `createImageFaceLandmarker`/`detectEarAnchorsForImage` add a
+ * one-shot IMAGE-mode path for uploaded photos, reusing
+ * computeRawEarAnchors's pure ear-anchor/rotation math directly with no
+ * smoothing — a single static detection has no per-frame jitter to smooth
+ * against.
  */
 
 import {
@@ -540,6 +545,36 @@ function computeRawEarAnchors(landmarks: NormalizedLandmark[], aspect: number): 
   };
 }
 
+/**
+ * One-shot detection against a fully decoded static photo — no RAF loop,
+ * no filter state, no smoothing (Phase 9: a single static detection has no
+ * per-frame jitter to smooth against, per build-plan.md). Reuses
+ * computeRawEarAnchors's exact ear-anchor/rotation math; only shims
+ * EarAnchors's field name (rawHeadRotation) and adds the timestampMs field
+ * to match TrackingFrame's shape, which render.ts's updateFrame expects
+ * regardless of caller. Returns null when no face is detected in the photo
+ * — callers turn that into a "try a different photo" prompt.
+ */
+export function detectEarAnchorsForImage(
+  landmarker: FaceLandmarker,
+  image: HTMLImageElement,
+): TrackingFrame | null {
+  const result = landmarker.detect(image);
+  const landmarks = result.faceLandmarks[0];
+  if (!landmarks) {
+    return null;
+  }
+  const aspect = image.naturalWidth / image.naturalHeight;
+  const anchors = computeRawEarAnchors(landmarks, aspect);
+  return {
+    left: anchors.left,
+    right: anchors.right,
+    faceScale: anchors.faceScale,
+    headRotation: anchors.rawHeadRotation,
+    timestampMs: performance.now(),
+  };
+}
+
 function createOneEuroFilter(minCutoffHz: number, beta: number): OneEuroFilter {
   return new OneEuroFilter(ONE_EURO_FILTER_INITIAL_FREQ_HZ, minCutoffHz, beta, ONE_EURO_DCUTOFF_HZ);
 }
@@ -652,7 +687,15 @@ function toDrawableLandmark(point: EarAnchorPoint): NormalizedLandmark {
   return { x: point.x, y: point.y, z: point.z, visibility: 1 };
 }
 
-async function createFaceLandmarker(): Promise<FaceLandmarker> {
+/**
+ * Creates a FaceLandmarker in the given running mode. `startTracking` uses
+ * 'VIDEO' for its per-frame detectForVideo() loop; Phase 9's
+ * createImageFaceLandmarker() below uses 'IMAGE' for one-shot detect()
+ * calls against an uploaded photo — MediaPipe requires the running mode a
+ * landmarker was created with to match whichever detect method is called
+ * on it.
+ */
+async function createFaceLandmarker(runningMode: 'VIDEO' | 'IMAGE'): Promise<FaceLandmarker> {
   const assetBaseUrl = getAssetBaseUrl();
   const vision = await FilesetResolver.forVisionTasks(`${assetBaseUrl}${WASM_BASE_PATH_SEGMENT}`);
   const modelAssetPath = `${assetBaseUrl}${MODEL_ASSET_PATH_SEGMENT}`;
@@ -663,7 +706,7 @@ async function createFaceLandmarker(): Promise<FaceLandmarker> {
   try {
     return await FaceLandmarker.createFromOptions(vision, {
       baseOptions: { modelAssetPath, delegate: 'GPU' },
-      runningMode: 'VIDEO',
+      runningMode,
       numFaces: 1,
     });
   } catch (gpuInitError) {
@@ -673,10 +716,25 @@ async function createFaceLandmarker(): Promise<FaceLandmarker> {
     );
     return FaceLandmarker.createFromOptions(vision, {
       baseOptions: { modelAssetPath, delegate: 'CPU' },
-      runningMode: 'VIDEO',
+      runningMode,
       numFaces: 1,
     });
   }
+}
+
+/**
+ * Phase 9: a landmarker for one-shot detect() calls against an uploaded
+ * photo, as opposed to startTracking's per-frame detectForVideo() loop.
+ * Callers (uploadPhoto.ts) are expected to create one per upload-mode
+ * session, cache it for reuse across retries within that session (avoiding
+ * repaying MediaPipe's WASM/model init cost on every retry), and close()
+ * it when the session ends — the same per-session lifecycle startTracking
+ * already uses for its own landmarker, just owned by the caller instead of
+ * this file, since one image-mode session may process several photos in a
+ * row (retries, and Phase 10's curated model photos).
+ */
+export async function createImageFaceLandmarker(): Promise<FaceLandmarker> {
+  return createFaceLandmarker('IMAGE');
 }
 
 function resizeCanvasToVideo(canvas: HTMLCanvasElement, video: HTMLVideoElement): void {
@@ -713,7 +771,7 @@ export async function startTracking(
   canvas: HTMLCanvasElement | null,
   onFrame?: TrackingFrameCallback,
 ): Promise<() => void> {
-  const faceLandmarker = await createFaceLandmarker();
+  const faceLandmarker = await createFaceLandmarker('VIDEO');
   const ctx = canvas ? canvas.getContext('2d') : null;
   if (canvas && !ctx) {
     throw new Error('[CollectiblissTryOn] 2D canvas context unavailable');

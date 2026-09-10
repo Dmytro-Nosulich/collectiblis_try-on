@@ -86,6 +86,8 @@ interface LiveViewElements {
   canvas: HTMLCanvasElement;
   liveStage: HTMLElement;
   captureButton: HTMLButtonElement;
+  compareToggleButton: HTMLButtonElement;
+  swapButton: HTMLButtonElement;
 }
 
 function createLiveViewElements(): LiveViewElements {
@@ -93,9 +95,9 @@ function createLiveViewElements(): LiveViewElements {
   root.className = 'live-view';
 
   // .live-stage is a plain (non-mirrored) positioning context, separate
-  // from .mirror-wrapper, specifically so the countdown overlay (mounted
-  // into liveStage, not mirrorWrapper) doesn't inherit mirrorWrapper's
-  // scaleX(-1) and render its digits backwards.
+  // from .mirror-wrapper, specifically so content mounted here (the
+  // countdown overlay, and the compare-view divider below) doesn't inherit
+  // mirrorWrapper's scaleX(-1) and render backwards/asymmetrically.
   const liveStage = document.createElement('div');
   liveStage.className = 'live-stage';
 
@@ -111,16 +113,58 @@ function createLiveViewElements(): LiveViewElements {
   canvas.className = 'live-canvas';
 
   mirrorWrapper.append(video, canvas);
-  liveStage.append(mirrorWrapper);
+
+  // Compare view (Phase 8): one continuous video/canvas — the same pair
+  // used for normal Live Try-On — with a CSS clip-path on `canvas` masking
+  // off one half, plus this divider line drawn over the seam. See
+  // styles.css's .is-comparing/.is-ar-left rules for the clip-path values
+  // (and the mirroring-math comment there before touching them) and
+  // render.ts's docs for why rendering both ears unconditionally, every
+  // frame, regardless of compare mode, is intentional and cheap — compare
+  // mode only ever changes which half of the already-rendered canvas is
+  // visible, never what gets rendered. The divider sits at the exact
+  // center, a fixed point of mirrorWrapper's scaleX(-1) reflection, so
+  // unlike the canvas clip-path it needs no mirror-side reasoning; it's a
+  // liveStage sibling of mirrorWrapper (not a child) purely to match the
+  // countdown overlay's existing precedent.
+  const compareDivider = document.createElement('div');
+  compareDivider.className = 'compare-divider';
+
+  liveStage.append(mirrorWrapper, compareDivider);
 
   const captureButton = document.createElement('button');
   captureButton.type = 'button';
   captureButton.className = 'button button--primary capture-button';
   captureButton.textContent = 'Capture';
 
-  root.append(liveStage, captureButton);
+  const compareToggleButton = document.createElement('button');
+  compareToggleButton.type = 'button';
+  compareToggleButton.className = 'button button--secondary';
+  compareToggleButton.textContent = 'Compare view';
+  compareToggleButton.setAttribute('aria-pressed', 'false');
 
-  return { root, video, canvas, liveStage, captureButton };
+  const swapButton = document.createElement('button');
+  swapButton.type = 'button';
+  swapButton.className = 'button button--secondary';
+  swapButton.textContent = 'Swap';
+  // Only meaningful once compare mode is on — see handleCompareToggle.
+  swapButton.hidden = true;
+
+  const liveControls = document.createElement('div');
+  liveControls.className = 'live-controls';
+  liveControls.append(captureButton, compareToggleButton, swapButton);
+
+  root.append(liveStage, liveControls);
+
+  return {
+    root,
+    video,
+    canvas,
+    liveStage,
+    captureButton,
+    compareToggleButton,
+    swapButton,
+  };
 }
 
 /**
@@ -146,7 +190,23 @@ export function renderLiveTryOn(
   }
 
   async function start(): Promise<void> {
-    const { root, video, canvas, liveStage, captureButton } = createLiveViewElements();
+    const { root, video, canvas, liveStage, captureButton, compareToggleButton, swapButton } =
+      createLiveViewElements();
+
+    function handleCompareToggle(): void {
+      const enabled = root.classList.toggle('is-comparing');
+      compareToggleButton.classList.toggle('button--primary', enabled);
+      compareToggleButton.classList.toggle('button--secondary', !enabled);
+      compareToggleButton.setAttribute('aria-pressed', String(enabled));
+      swapButton.hidden = !enabled;
+    }
+
+    function handleSwap(): void {
+      root.classList.toggle('is-ar-left');
+    }
+
+    compareToggleButton.addEventListener('click', handleCompareToggle);
+    swapButton.addEventListener('click', handleSwap);
 
     function handleRetake(): void {
       reviewScreen?.dispose();

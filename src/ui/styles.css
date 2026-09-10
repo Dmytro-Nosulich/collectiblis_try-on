@@ -271,15 +271,72 @@
 }
 
 .capture-button {
-  align-self: center;
   padding: 0.7rem 1.75rem;
 }
 
 /* Hide (not remove) the live layer while reviewing a capture — the video
    feed and WebGL canvas keep running underneath so retake is instant. */
 .live-view.is-reviewing .live-stage,
-.live-view.is-reviewing .capture-button {
+.live-view.is-reviewing .live-controls {
   display: none;
+}
+
+.live-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* --- Compare view (Phase 8) --------------------------------------------
+   One continuous video/canvas (the same pair normal Live Try-On uses) — no
+   second video, no two boxes. render.ts's canvas already renders both ears
+   every frame regardless of compare mode; compare mode only changes which
+   half of that already-rendered canvas is visible, via clip-path, plus this
+   divider line drawn over the seam. Toggling/swapping is a pure class-list
+   flip on .live-view, so there's nothing to restart. */
+
+/* Hidden (full canvas visible) by default — compare mode off reproduces the
+   pre-compare-view single full-AR view exactly, with zero extra styling. */
+.live-view.is-comparing .live-canvas {
+  /* AR default is screen-RIGHT. This looks backwards on first read — it is
+     NOT a mistake. .mirror-wrapper's scaleX(-1) flips its already-painted
+     children (clip-path included) as the final compositing step; clip-path
+     itself is always evaluated in the canvas's own local, untransformed
+     box. scaleX(-1) reflects local x to final (width - x) — local-left maps
+     to final-right. So "keep the canvas's LOCAL left half" is what lands
+     the AR render on the visual RIGHT. Verified against the CSS transform/
+     clip-path spec — see build-progress.md's Phase 8 entry before changing
+     this; this project has a documented prior mirroring sign bug
+     (tracking.ts's Phase 2 entry) from assuming instead of verifying. */
+  clip-path: inset(0 50% 0 0);
+}
+
+/* Swap: AR moves to screen-LEFT — keep the canvas's local RIGHT half. */
+.live-view.is-comparing.is-ar-left .live-canvas {
+  clip-path: inset(0 0 0 50%);
+}
+
+/* Divider line: sits at the exact center, a fixed point of the mirror
+   reflection, so — unlike the clip-path above — it needs no mirror-side
+   reasoning. Mounted as a .live-stage sibling of .mirror-wrapper (not a
+   child) to match the countdown overlay's existing precedent. */
+.compare-divider {
+  display: none;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0.25rem rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.live-view.is-comparing .compare-divider {
+  display: block;
 }
 
 .countdown-overlay {

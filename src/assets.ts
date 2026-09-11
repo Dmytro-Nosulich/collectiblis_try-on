@@ -43,5 +43,14 @@ export function getAssetBaseUrl(override?: string): string {
   if (scriptDirectoryUrl) {
     return scriptDirectoryUrl;
   }
-  return document.baseURI;
+  // document.baseURI is the page's own full URL (query string, hash, and
+  // any filename included, e.g. ".../?forceDeviceTier=low") — NOT already a
+  // directory-only URL like scriptDirectoryUrl above. Resolving '.' against
+  // it strips the filename/query/hash down to the containing directory
+  // (with a trailing slash), matching what every caller concatenates
+  // relative asset paths onto. Without this, any query string on the dev
+  // harness page (e.g. this file's own `?forceDeviceTier=` debug override)
+  // corrupted every asset URL built from this fallback — found via Phase 11
+  // testing, not a Phase 11 regression (this fallback predates it).
+  return new URL('.', document.baseURI).href;
 }

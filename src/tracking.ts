@@ -256,6 +256,38 @@ export const DEFAULT_ROTATION_TUNING: Readonly<RotationTuning> = Object.freeze({
 /** Live-tunable rotation state — same "one mutable object" pattern as earAnchorTuning, for the same reason (see that constant's comment). */
 export const rotationTuning: RotationTuning = { ...DEFAULT_ROTATION_TUNING };
 
+// --- Detection cadence (Phase 11) -----------------------------------------
+//
+// detectForVideo() is the expensive part of each tick; onFrame/render.ts's
+// updateFrame (and therefore the actual WebGL render + video display) are
+// cheap by comparison and should keep running every RAF tick regardless, so
+// video playback and the earring's on-screen render stay at full display
+// refresh rate even when detection itself runs less often. startTracking's
+// tick() below only runs detectForVideo + landmark/filter work every Nth
+// tick per this value, caching and repeating the last computed TrackingFrame
+// on skipped ticks so onFrame still fires unconditionally every tick.
+//
+// Safe to change independent of the One Euro filters above: each filter's
+// internal frequency estimate is recalculated from real consecutive call
+// timestamps (see ONE_EURO_FILTER_INITIAL_FREQ_HZ's comment below), not a
+// fixed assumed rate — filters are only ever invoked on ticks where
+// detection actually ran, so a lower cadence just means the filters see
+// fewer, correctly-timestamped samples, with no special-casing needed here.
+
+export interface DetectionCadenceTuning {
+  /** Run detectForVideo() every Nth RAF tick. 1 = every tick (today's default, unchanged). */
+  intervalFrames: number;
+}
+
+export const DEFAULT_DETECTION_CADENCE_TUNING: Readonly<DetectionCadenceTuning> = Object.freeze({
+  intervalFrames: 1,
+});
+
+/** Live-tunable cadence state — same "one mutable object" pattern as earAnchorTuning/rotationTuning, for the same reason (see earAnchorTuning's comment). */
+export const detectionCadenceTuning: DetectionCadenceTuning = {
+  ...DEFAULT_DETECTION_CADENCE_TUNING,
+};
+
 // `1eurofilter` is a SCALAR filter (confirmed by reading its source: it
 // wraps two plain-number low-pass filters), so each ear anchor needs one
 // filter instance per coordinate (x, y, z) — 6 total for two ears. These
@@ -787,97 +819,118 @@ export async function startTracking(
 
   let rafHandle = 0;
   let frameCount = 0;
-  let frameTimeAccumulatorMs = 0;
+  let detectionCount = 0;
+  let detectionTimeAccumulatorMs = 0;
+  // Repeated on skipped (non-detection) ticks so onFrame still fires every
+  // RAF tick regardless of detectionCadenceTuning — see that constant's
+  // comment for why this is what keeps render.ts's render + the <video>
+  // element at full display refresh rate even when detection runs slower.
+  let lastFrame: TrackingFrame | null = null;
 
   const tick = (): void => {
     rafHandle = requestAnimationFrame(tick);
 
-    const frameStartMs = performance.now();
-    const result = faceLandmarker.detectForVideo(video, frameStartMs);
-    const frameTimeMs = performance.now() - frameStartMs;
+    const detectionIntervalFrames = Math.max(1, Math.round(detectionCadenceTuning.intervalFrames));
+    const shouldDetect = frameCount % detectionIntervalFrames === 0;
 
-    if (canvas && ctx) {
-      resizeCanvasToVideo(canvas, video);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (shouldDetect) {
+      const frameStartMs = performance.now();
+      const result = faceLandmarker.detectForVideo(video, frameStartMs);
+      const frameTimeMs = performance.now() - frameStartMs;
+
+      // Gated with detection itself (not run every tick) — otherwise the
+      // debug canvas would clear every tick but only redraw on detection
+      // ticks, flashing to blank on every skipped one.
+      if (canvas && ctx) {
+        resizeCanvasToVideo(canvas, video);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+      const landmarks = result.faceLandmarks[0];
+      if (landmarks) {
+        drawingUtils?.drawLandmarks(landmarks, { radius: 1.5, color: '#00ff88' });
+
+        // video's own intrinsic dimensions, not canvas.width/height — those
+        // only exist (and match the video) when a debug canvas was passed.
+        const aspect = video.videoWidth / video.videoHeight;
+        const rawAnchors = computeRawEarAnchors(landmarks, aspect);
+        // 1eurofilter expects seconds; performance.now() is ms.
+        const timestampSeconds = frameStartMs / 1000;
+        const smoothedRight = filterEarAnchor(
+          trackingFilters.right,
+          rawAnchors.right,
+          timestampSeconds,
+          earAnchorTuning.minCutoffHz,
+          earAnchorTuning.beta,
+        );
+        const smoothedLeft = filterEarAnchor(
+          trackingFilters.left,
+          rawAnchors.left,
+          timestampSeconds,
+          earAnchorTuning.minCutoffHz,
+          earAnchorTuning.beta,
+        );
+        const smoothedFaceScale = filterScalar(
+          trackingFilters.faceScale,
+          rawAnchors.faceScale,
+          timestampSeconds,
+          earAnchorTuning.minCutoffHz,
+          earAnchorTuning.beta,
+        );
+        const smoothedHeadRotation = filterHeadRotation(
+          trackingFilters.headRotation,
+          rawAnchors.rawHeadRotation,
+          timestampSeconds,
+        );
+
+        lastFrame = {
+          left: smoothedLeft,
+          right: smoothedRight,
+          faceScale: smoothedFaceScale,
+          headRotation: smoothedHeadRotation,
+          timestampMs: frameStartMs,
+        };
+
+        // Dim raw anchor dots drawn first, bright smoothed dots on top — lets
+        // jitter (raw dot shaking at rest) vs. lag (smoothed dot trailing
+        // during motion) be judged in the same view.
+        drawingUtils?.drawLandmarks([toDrawableLandmark(rawAnchors.right)], {
+          radius: 3,
+          color: RAW_EAR_ANCHOR_COLOR,
+        });
+        drawingUtils?.drawLandmarks([toDrawableLandmark(rawAnchors.left)], {
+          radius: 3,
+          color: RAW_EAR_ANCHOR_COLOR,
+        });
+        drawingUtils?.drawLandmarks([toDrawableLandmark(smoothedRight)], {
+          radius: 5,
+          color: SMOOTHED_RIGHT_EAR_ANCHOR_COLOR,
+        });
+        drawingUtils?.drawLandmarks([toDrawableLandmark(smoothedLeft)], {
+          radius: 5,
+          color: SMOOTHED_LEFT_EAR_ANCHOR_COLOR,
+        });
+      } else {
+        lastFrame = null;
+      }
+
+      // Counts actual detections, not RAF ticks — at intervalFrames > 1
+      // these diverge, and averaging frameTimeMs over tick count would
+      // silently understate real per-detection cost (diluted by zero-cost
+      // skip ticks that never call detectForVideo at all).
+      detectionCount += 1;
+      detectionTimeAccumulatorMs += frameTimeMs;
+      if (detectionCount % FPS_LOG_INTERVAL_FRAMES === 0) {
+        const avgFrameTimeMs = detectionTimeAccumulatorMs / FPS_LOG_INTERVAL_FRAMES;
+        console.log(
+          `[CollectiblissTryOn] detectForVideo avg over ${FPS_LOG_INTERVAL_FRAMES} detections: ` +
+            `${avgFrameTimeMs.toFixed(2)}ms (${(1000 / avgFrameTimeMs).toFixed(1)} fps)`,
+        );
+        detectionTimeAccumulatorMs = 0;
+      }
     }
-    const landmarks = result.faceLandmarks[0];
-    if (landmarks) {
-      drawingUtils?.drawLandmarks(landmarks, { radius: 1.5, color: '#00ff88' });
 
-      // video's own intrinsic dimensions, not canvas.width/height — those
-      // only exist (and match the video) when a debug canvas was passed.
-      const aspect = video.videoWidth / video.videoHeight;
-      const rawAnchors = computeRawEarAnchors(landmarks, aspect);
-      // 1eurofilter expects seconds; performance.now() is ms.
-      const timestampSeconds = frameStartMs / 1000;
-      const smoothedRight = filterEarAnchor(
-        trackingFilters.right,
-        rawAnchors.right,
-        timestampSeconds,
-        earAnchorTuning.minCutoffHz,
-        earAnchorTuning.beta,
-      );
-      const smoothedLeft = filterEarAnchor(
-        trackingFilters.left,
-        rawAnchors.left,
-        timestampSeconds,
-        earAnchorTuning.minCutoffHz,
-        earAnchorTuning.beta,
-      );
-      const smoothedFaceScale = filterScalar(
-        trackingFilters.faceScale,
-        rawAnchors.faceScale,
-        timestampSeconds,
-        earAnchorTuning.minCutoffHz,
-        earAnchorTuning.beta,
-      );
-      const smoothedHeadRotation = filterHeadRotation(
-        trackingFilters.headRotation,
-        rawAnchors.rawHeadRotation,
-        timestampSeconds,
-      );
-
-      onFrame?.({
-        left: smoothedLeft,
-        right: smoothedRight,
-        faceScale: smoothedFaceScale,
-        headRotation: smoothedHeadRotation,
-        timestampMs: frameStartMs,
-      });
-
-      // Dim raw anchor dots drawn first, bright smoothed dots on top — lets
-      // jitter (raw dot shaking at rest) vs. lag (smoothed dot trailing
-      // during motion) be judged in the same view.
-      drawingUtils?.drawLandmarks([toDrawableLandmark(rawAnchors.right)], {
-        radius: 3,
-        color: RAW_EAR_ANCHOR_COLOR,
-      });
-      drawingUtils?.drawLandmarks([toDrawableLandmark(rawAnchors.left)], {
-        radius: 3,
-        color: RAW_EAR_ANCHOR_COLOR,
-      });
-      drawingUtils?.drawLandmarks([toDrawableLandmark(smoothedRight)], {
-        radius: 5,
-        color: SMOOTHED_RIGHT_EAR_ANCHOR_COLOR,
-      });
-      drawingUtils?.drawLandmarks([toDrawableLandmark(smoothedLeft)], {
-        radius: 5,
-        color: SMOOTHED_LEFT_EAR_ANCHOR_COLOR,
-      });
-    } else {
-      onFrame?.(null);
-    }
-
+    onFrame?.(lastFrame);
     frameCount += 1;
-    frameTimeAccumulatorMs += frameTimeMs;
-    if (frameCount % FPS_LOG_INTERVAL_FRAMES === 0) {
-      const avgFrameTimeMs = frameTimeAccumulatorMs / FPS_LOG_INTERVAL_FRAMES;
-      console.log(
-        `[CollectiblissTryOn] detectForVideo avg over ${FPS_LOG_INTERVAL_FRAMES} frames: ` +
-          `${avgFrameTimeMs.toFixed(2)}ms (${(1000 / avgFrameTimeMs).toFixed(1)} fps)`,
-      );
-      frameTimeAccumulatorMs = 0;
-    }
   };
 
   rafHandle = requestAnimationFrame(tick);

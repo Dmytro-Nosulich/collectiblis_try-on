@@ -2,6 +2,22 @@
  * Top-level orchestrator: opens the modal shell, shows the mode chooser
  * first, and swaps in Live Try-On, Upload Photo, or Choose a Model when
  * picked. This is what main.ts's real openTryOn() calls.
+ *
+ * Phase 11 lazy-loading note: nothing AR-related fetches before a mode is
+ * picked. Importing renderLiveTryOn/renderUploadPhoto/renderChooseModel
+ * above only costs JS parse/eval — unavoidable given Phase 0's
+ * single-IIFE-bundle decision (no dynamic import() anywhere in this repo),
+ * since the whole widget ships as one <script> tag for simple Shopify theme
+ * embedding. It never costs a network request: neither tracking.ts nor
+ * render.ts has any top-level (module-eval-time) side effects, and the
+ * actual MediaPipe WASM/model fetch (tracking.ts's createFaceLandmarker) and
+ * GLB fetch (render.ts's getGltfLoader().loadAsync) both live inside
+ * function bodies that are only reachable once one of this file's three
+ * onLiveTryOn/onUploadPhoto/onChooseModel handlers below actually runs —
+ * i.e. only after a mode tile is clicked in renderModeChooser, which itself
+ * imports none of this fetch logic. Verified via direct call-site tracing,
+ * not assumed — confirm via a real browser's Network panel too (see
+ * build-progress.md's Phase 11 entry).
  */
 
 import type { TryOnOptions } from '../main.ts';

@@ -17,6 +17,7 @@ import type { TryOnOptions } from '../main.ts';
 import type { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { createImageFaceLandmarker, detectEarAnchorsForImage } from '../tracking.ts';
 import { createEarringScene, type EarringScene } from '../render.ts';
+import { detectDeviceTier } from '../deviceCapabilities.ts';
 import { compositeEarringOntoImage } from './capture.ts';
 import { createReviewScreen, type ReviewScreen } from './reviewScreen.ts';
 import { createProcessingState, createErrorState } from './staticPhotoStates.ts';
@@ -176,9 +177,13 @@ export function renderChooseModel(
     // target, read back via compositeEarringOntoImage below and then
     // discarded.
     const earringCanvas = document.createElement('canvas');
+    // No detection-cadence change (this is a one-shot detect(), not a RAF
+    // loop) — only caps the WebGL drawing-buffer resolution, same reasoning
+    // as liveTryOn.ts's use of this. See deviceCapabilities.ts.
+    const { pixelRatioCap } = detectDeviceTier();
     let scene: EarringScene;
     try {
-      scene = await createEarringScene(earringCanvas, image, options.glbUrl);
+      scene = await createEarringScene(earringCanvas, image, options.glbUrl, { pixelRatioCap });
     } catch (error) {
       if (cancelled) {
         return;

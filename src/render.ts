@@ -38,6 +38,13 @@ const ASSUMED_INTEROCULAR_DISTANCE_METERS = 0.063;
 const ORTHOGRAPHIC_NEAR = -2000;
 const ORTHOGRAPHIC_FAR = 2000;
 
+// Phase 11: how long to wait after a 'webglcontextlost' event before giving
+// up on the browser/three.js's own silent restoration (see
+// createEarringScene's context-loss handling) and surfacing an error to the
+// caller instead. Unvalidated guess — confirm against a real forced-loss
+// test and real iOS Safari memory-pressure conditions.
+const CONTEXT_LOST_RECOVERY_TIMEOUT_MS = 3000;
+
 // Phase 4: rotation axes in this file's world space (X=screen-right,
 // Y=screen-down, Z=depth — see the OrthographicCamera setup below). Roll
 // rotates about the screen-normal (Z), pitch about the horizontal (X), yaw
@@ -198,12 +205,33 @@ function placeEar(
   anchorGroup.visible = true;
 }
 
+export interface CreateEarringSceneOptions {
+  /**
+   * Caps renderer.setPixelRatio() — omitted (or 1) preserves this file's
+   * pre-Phase-11 behavior exactly, which is what every index.html
+   * debug-harness call site relies on by not passing this option at all.
+   * Typically window.devicePixelRatio itself, pre-capped by
+   * deviceCapabilities.ts's detectDeviceTier() before being passed in here
+   * — see that module for why devicePixelRatio is treated as a workload
+   * multiplier to cap, not a device-tier signal on its own.
+   */
+  pixelRatioCap?: number;
+  /**
+   * Fires only if a lost WebGL context doesn't restore within
+   * CONTEXT_LOST_RECOVERY_TIMEOUT_MS — see the context-loss handling below
+   * this function for why most losses need no app-level recovery code at
+   * all, and why this is a last-resort signal rather than the primary
+   * recovery mechanism.
+   */
+  onContextLost?: () => void;
+}
+
 export interface EarringScene {
   /** Positions both ear instances from this frame's smoothed data (or hides them on `null`) and renders. */
   updateFrame(frame: TrackingFrame | null): void;
   /** Loads a different GLB and swaps it onto both ears in place — anchorGroup's live position/scale/rotation are untouched, so there's no visual jump. Debug-harness-only for now (v1 has no mid-session product switching, per CLAUDE.md). */
   loadModel(glbUrl: string): Promise<void>;
-  /** Releases GPU resources (geometries/materials/renderer). Does not touch the shared GLTFLoader/DRACOLoader singleton. */
+  /** Releases GPU resources (geometries/materials/renderer) and the context-loss listeners below. Does not touch the shared GLTFLoader/DRACOLoader singleton. */
   dispose(): void;
 }
 
@@ -227,6 +255,7 @@ export async function createEarringScene(
   canvas: HTMLCanvasElement,
   source: HTMLVideoElement | HTMLImageElement,
   glbUrl: string,
+  options: CreateEarringSceneOptions = {},
 ): Promise<EarringScene> {
   const renderer = new THREE.WebGLRenderer({
     canvas,
@@ -241,13 +270,58 @@ export async function createEarringScene(
   });
   // alpha: true alone already defaults WebGLRenderer's clear alpha to 0;
   // set explicitly anyway as documentation against relying on an unstated
-  // default. Do NOT call renderer.setPixelRatio(): leaving it at 1 is what
-  // makes canvas.width/height equal to the WebGL drawing-buffer size, which
-  // every position/scale formula in this file assumes. Higher-DPI
-  // sharpness is a real improvement but belongs in the Phase 11
-  // performance pass, once those formulas are reworked to account for it.
+  // default.
   renderer.setClearColor(0x000000, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  // Phase 11: was deliberately left uncalled through Phase 3-10 (pixelRatio
+  // stuck at Three.js's default of 1) specifically so canvas.width/height
+  // equaled the WebGL drawing-buffer size, which every position/scale
+  // formula in this file used to assume directly. Now that syncSizeToSource
+  // and placeEar below key off the closure-scoped currentWidth/currentHeight
+  // (the *source's* logical pixel size) instead of canvas.width/height, it's
+  // safe to let the drawing buffer be larger than that. Verified against
+  // three.js's own WebGLRenderer.setSize source: it derives
+  // canvas.width/height = width/height * pixelRatio internally, so passing
+  // logical width/height into setSize (below) and letting the renderer
+  // derive the (possibly larger) buffer size is exactly the standard
+  // three.js high-DPI pattern. options.pixelRatioCap is omitted (defaults to
+  // 1) by every index.html debug-harness call site, so this line is a no-op
+  // there — behavior changes only for callers that opt in.
+  renderer.setPixelRatio(options.pixelRatioCap ?? 1);
+
+  // --- WebGL context-loss handling (Phase 11) -----------------------------
+  //
+  // Verified directly against node_modules/three/src/renderers/
+  // WebGLRenderer.js: THREE.WebGLRenderer already installs its own
+  // 'webglcontextlost'/'webglcontextrestored' listeners at construction
+  // (before these ones), its own onContextLost already calls
+  // event.preventDefault() (permitting browser-side restoration), render()
+  // already silently no-ops while lost, and its own onContextRestore already
+  // calls initGLContext() to rebuild its internal GPU-resource caches — the
+  // next render() call after restore lazily re-uploads geometry/textures
+  // from the still-alive JS-side scene graph with no manual re-init needed.
+  // So most context losses need zero app code to recover from; what's
+  // missing is a signal for the case restoration DOESN'T happen (a real risk
+  // on iOS Safari under memory pressure per CLAUDE.md) so the caller can show
+  // an error instead of leaving the view silently frozen forever.
+  let contextLostTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  function handleContextLost(): void {
+    contextLostTimeoutHandle = setTimeout(() => {
+      contextLostTimeoutHandle = undefined;
+      options.onContextLost?.();
+    }, CONTEXT_LOST_RECOVERY_TIMEOUT_MS);
+  }
+
+  function handleContextRestored(): void {
+    if (contextLostTimeoutHandle !== undefined) {
+      clearTimeout(contextLostTimeoutHandle);
+      contextLostTimeoutHandle = undefined;
+    }
+  }
+
+  canvas.addEventListener('webglcontextlost', handleContextLost);
+  canvas.addEventListener('webglcontextrestored', handleContextRestored);
 
   const scene = new THREE.Scene();
 
@@ -289,13 +363,30 @@ export async function createEarringScene(
     return { width: source.naturalWidth, height: source.naturalHeight };
   }
 
+  // Logical (CSS-pixel-equivalent) source dimensions — what the
+  // OrthographicCamera frustum and placeEar's pixel-space math key off, as
+  // opposed to canvas.width/height, which is this same size times
+  // renderer.getPixelRatio() once options.pixelRatioCap != 1. Comparing
+  // against canvas.width/height directly (as this function used to) would
+  // never match again once pixelRatio != 1, since canvas.width becomes
+  // width * pixelRatio while `width` here stays the source's logical size —
+  // that would silently force a full resize/projection-matrix recompute on
+  // every single frame instead of only on real video-resolution changes.
+  let currentWidth = 0;
+  let currentHeight = 0;
+
   function syncSizeToSource(): void {
     const { width, height } = getSourceDimensions();
-    if (canvas.width === width && canvas.height === height) {
+    if (currentWidth === width && currentHeight === height) {
       return;
     }
-    canvas.width = width;
-    canvas.height = height;
+    currentWidth = width;
+    currentHeight = height;
+    // Derives canvas.width/height = width/height * renderer.getPixelRatio()
+    // internally (verified against three.js's own source) — no longer
+    // stamping canvas.width/height manually here, since that would be
+    // redundant with (and immediately overwritten by) this call once
+    // pixelRatio != 1.
     renderer.setSize(width, height, false);
     camera.right = width;
     camera.bottom = height;
@@ -328,16 +419,16 @@ export async function createEarringScene(
         frame.right,
         frame.faceScale,
         frame.headRotation,
-        canvas.width,
-        canvas.height,
+        currentWidth,
+        currentHeight,
       );
       placeEar(
         leftEar.anchorGroup,
         frame.left,
         frame.faceScale,
         frame.headRotation,
-        canvas.width,
-        canvas.height,
+        currentWidth,
+        currentHeight,
       );
     } else {
       rightEar.anchorGroup.visible = false;
@@ -353,6 +444,12 @@ export async function createEarringScene(
   }
 
   function dispose(): void {
+    canvas.removeEventListener('webglcontextlost', handleContextLost);
+    canvas.removeEventListener('webglcontextrestored', handleContextRestored);
+    if (contextLostTimeoutHandle !== undefined) {
+      clearTimeout(contextLostTimeoutHandle);
+      contextLostTimeoutHandle = undefined;
+    }
     disposeObject3D(scene);
     renderer.dispose();
   }

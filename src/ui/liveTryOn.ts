@@ -17,11 +17,20 @@
 
 import type { TryOnOptions } from '../main.ts';
 import { startCamera, stopCamera, type CameraSession } from '../camera.ts';
-import { startTracking, type TrackingFrame } from '../tracking.ts';
+import {
+  startTracking,
+  detectionCadenceTuning,
+  DEFAULT_DETECTION_CADENCE_TUNING,
+  type TrackingFrame,
+} from '../tracking.ts';
 import { createEarringScene, type EarringScene } from '../render.ts';
+import { detectDeviceTier } from '../deviceCapabilities.ts';
 import { captureMirroredComposite } from './capture.ts';
 import { renderCountdown } from './countdownOverlay.ts';
 import { createReviewScreen, type ReviewScreen } from './reviewScreen.ts';
+
+/** Detection cadence dropped to every-other-frame on detected low-end devices only — see deviceCapabilities.ts and tracking.ts's detectionCadenceTuning docs. */
+const LOW_END_DETECTION_INTERVAL_FRAMES = 2;
 
 export interface LiveTryOnHandlers {
   onBackToChooser(): void;
@@ -56,7 +65,18 @@ function createLoadingState(): HTMLElement {
   return wrap;
 }
 
-function createErrorState(message: string, onBackToChooser: () => void): HTMLElement {
+/**
+ * `onRetry`, when given, prepends a primary "Try again" button ahead of the
+ * two existing mode-switch buttons — used by Phase 11's WebGL-context-lost
+ * recovery (see handleContextLost), which has something worth retrying
+ * unlike a camera-permission/no-camera error (that call site passes nothing
+ * for this param, so its behavior is unchanged).
+ */
+function createErrorState(
+  message: string,
+  onBackToChooser: () => void,
+  onRetry?: () => void,
+): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'state-centered';
 
@@ -66,6 +86,15 @@ function createErrorState(message: string, onBackToChooser: () => void): HTMLEle
 
   const actions = document.createElement('div');
   actions.className = 'error-actions';
+
+  if (onRetry) {
+    const retryButton = document.createElement('button');
+    retryButton.type = 'button';
+    retryButton.className = 'button button--primary';
+    retryButton.textContent = 'Try again';
+    retryButton.addEventListener('click', onRetry);
+    actions.append(retryButton);
+  }
 
   for (const label of ['Try uploading a photo instead', 'Choose a model photo instead']) {
     const button = document.createElement('button');
@@ -189,7 +218,53 @@ export function renderLiveTryOn(
     earringScene?.updateFrame(frame);
   }
 
+  /**
+   * Stops/disposes whatever pipeline resources are currently live and clears
+   * their refs, so it's safe to call more than once (real dispose(), or a
+   * WebGL-context-lost retry that's about to call start() again from
+   * scratch) without double-stopping an already-stopped camera track or
+   * double-closing an already-closed landmarker.
+   */
+  function teardownPipeline(): void {
+    cancelCountdown?.();
+    cancelCountdown = undefined;
+    reviewScreen?.dispose();
+    reviewScreen = undefined;
+    trackingCleanup?.();
+    trackingCleanup = undefined;
+    earringScene?.dispose();
+    earringScene = undefined;
+    if (cameraSession) {
+      stopCamera(cameraSession);
+      cameraSession = undefined;
+    }
+  }
+
+  /**
+   * Fires only if render.ts's WebGL-context-lost recovery timeout elapses
+   * without the browser restoring the context on its own (see render.ts's
+   * context-loss handling for why most losses need no recovery code at
+   * all). Tears down the now-unrecoverable pipeline and offers a real retry
+   * — distinct from the camera-permission error state below, which has
+   * nothing to retry.
+   */
+  function handleContextLost(): void {
+    if (cancelled) {
+      return;
+    }
+    teardownPipeline();
+    container.replaceChildren(
+      createErrorState(
+        'Something went wrong with the camera view. Please try again.',
+        handlers.onBackToChooser,
+        () => start(),
+      ),
+    );
+  }
+
   async function start(): Promise<void> {
+    container.replaceChildren(createLoadingState());
+
     const { root, video, canvas, liveStage, captureButton, compareToggleButton, swapButton } =
       createLiveViewElements();
 
@@ -263,13 +338,28 @@ export function renderLiveTryOn(
     }
     cameraSession = session;
 
+    // Device tier recomputed fresh on every start() call (including a
+    // context-lost retry) — cheap (two navigator property reads), so no
+    // need to cache it across the mode's lifetime. Low-end devices drop
+    // detection cadence to every-other-frame (tracking.ts's
+    // detectionCadenceTuning) and cap the WebGL drawing-buffer resolution
+    // (render.ts's pixelRatioCap); see deviceCapabilities.ts for why
+    // hardwareConcurrency (not devicePixelRatio) is the tier signal.
+    const tier = detectDeviceTier();
+    detectionCadenceTuning.intervalFrames = tier.isLowEnd
+      ? LOW_END_DETECTION_INTERVAL_FRAMES
+      : DEFAULT_DETECTION_CADENCE_TUNING.intervalFrames;
+
     // No debug canvas passed to startTracking — the visible canvas here is
     // render.ts's WebGL surface, and a canvas can only host one kind of
     // rendering context. Runs in parallel with createEarringScene since
     // neither depends on the other, only on the now-ready video.
     const [cleanup, scene] = await Promise.all([
       startTracking(video, null, handleFrame),
-      createEarringScene(canvas, video, options.glbUrl),
+      createEarringScene(canvas, video, options.glbUrl, {
+        pixelRatioCap: tier.pixelRatioCap,
+        onContextLost: handleContextLost,
+      }),
     ]);
 
     if (cancelled) {
@@ -283,19 +373,10 @@ export function renderLiveTryOn(
     container.replaceChildren(root);
   }
 
-  container.replaceChildren(createLoadingState());
   start();
 
   return function dispose(): void {
     cancelled = true;
-    cancelCountdown?.();
-    cancelCountdown = undefined;
-    reviewScreen?.dispose();
-    reviewScreen = undefined;
-    trackingCleanup?.();
-    earringScene?.dispose();
-    if (cameraSession) {
-      stopCamera(cameraSession);
-    }
+    teardownPipeline();
   };
 }

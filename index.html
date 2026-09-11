@@ -84,6 +84,25 @@
       </button>
     </div>
 
+    <div id="debug-cadence-tuning-panel" style="margin-top: 1rem; max-width: 420px">
+      <h3 style="margin-bottom: 0.25rem">Detection cadence tuning (debug only, Phase 11)</h3>
+      <p style="margin-top: 0; font-size: 0.85rem; color: #555">
+        Live-adjusts src/tracking.ts's <code>detectionCadenceTuning</code> — runs
+        <code>detectForVideo()</code> every Nth RAF tick while onFrame/render keep firing every
+        tick. Applies to both debug sections on this page (they share the same tracking.ts module
+        state). Useful for re-judging the ear-anchor/rotation tuning above at a lower effective
+        sample rate, since that's what detected low-end devices actually run at in production.
+      </p>
+      <div id="debug-cadence-tuning-sliders"></div>
+      <button
+        id="debug-cadence-tuning-reset"
+        type="button"
+        style="margin-top: 0.5rem; font-size: 0.85rem; padding: 0.3rem 0.7rem"
+      >
+        Reset to defaults
+      </button>
+    </div>
+
     <script type="module">
       import { startCamera } from '/src/camera.ts';
       import {
@@ -92,6 +111,8 @@
         DEFAULT_EAR_ANCHOR_TUNING,
         rotationTuning,
         DEFAULT_ROTATION_TUNING,
+        detectionCadenceTuning,
+        DEFAULT_DETECTION_CADENCE_TUNING,
       } from '/src/tracking.ts';
 
       const debugButton = document.getElementById('debug-tracking-button');
@@ -204,6 +225,20 @@
       document
         .getElementById('debug-rotation-tuning-reset')
         .addEventListener('click', resetRotationTuning);
+
+      const DETECTION_CADENCE_CONTROLS = [
+        ['intervalFrames', 'Detection interval (RAF ticks)', 1, 6, 1],
+      ];
+
+      const resetDetectionCadenceTuning = createTuningPanel(
+        document.getElementById('debug-cadence-tuning-sliders'),
+        DETECTION_CADENCE_CONTROLS,
+        detectionCadenceTuning,
+        DEFAULT_DETECTION_CADENCE_TUNING,
+      );
+      document
+        .getElementById('debug-cadence-tuning-reset')
+        .addEventListener('click', resetDetectionCadenceTuning);
     </script>
 
     <h2>Phase 3/4 debug: earring render + orientation/hang tuning</h2>
